@@ -22,3 +22,12 @@ jobs:
 
       - name: Run tests
         run: pytest
+
+      - name: Smoke test installed CLI
+        run: |
+          data-test-suggestion-agent --help
+          data-test-suggestion-agent --version
+          rm -rf outputs
+          data-test-suggestion-agent --output-dir outputs
+          test -f outputs/data_test_trace.json
+          python -m json.tool outputs/data_test_trace.json
