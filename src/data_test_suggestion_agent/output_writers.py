@@ -8,6 +8,7 @@ from typing import Any
 
 TRACE_FILE_NAME = "data_test_trace.json"
 PROFILE_FILE_NAME = "dataset_profile.json"
+PAYLOAD_FILE_NAME = "test_suggestion_payload.json"
 
 
 def write_json_artifact(output_dir: Path, file_name: str, payload: dict[str, Any]) -> Path:
