@@ -68,7 +68,8 @@ def test_payload_builder_without_context_includes_safe_boundaries_and_evidence()
     assert evidence["profile_summary"]["column_count"] == 9
     assert "email" in evidence["profile_summary"]["column_names"]
     email_profile = next(column for column in evidence["columns"] if column["name"] == "email")
-    assert email_profile["pandas_dtype"] == "object"
+    assert email_profile["profile_type"] == "text"
+    assert email_profile["pandas_dtype"] in {"object", "str", "string"}
     assert email_profile["null_count"] == 0
     assert email_profile["unique_count"] == 24
 
