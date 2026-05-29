@@ -9,7 +9,11 @@ import pytest
 
 from data_test_suggestion_agent import __version__
 from data_test_suggestion_agent.cli import FUTURE_STAGES, main
-from data_test_suggestion_agent.output_writers import PROFILE_FILE_NAME, TRACE_FILE_NAME
+from data_test_suggestion_agent.output_writers import (
+    PAYLOAD_FILE_NAME,
+    PROFILE_FILE_NAME,
+    TRACE_FILE_NAME,
+)
 
 SAMPLE_DATASET = Path("sample_data/customers/customers_for_test_suggestions.csv")
 SAMPLE_CONTEXT = Path("config/examples/customer_dataset_context.yaml")
@@ -26,6 +30,7 @@ def test_cli_writes_scaffold_trace_without_profile(tmp_path, capsys):
     assert output_dir.is_dir()
     assert trace_path.is_file()
     assert not (output_dir / PROFILE_FILE_NAME).exists()
+    assert not (output_dir / PAYLOAD_FILE_NAME).exists()
     assert str(trace_path) in capsys.readouterr().out
 
     trace = json.loads(trace_path.read_text(encoding="utf-8"))
@@ -38,31 +43,46 @@ def test_cli_writes_scaffold_trace_without_profile(tmp_path, capsys):
     assert trace["stages"]["context_loading"] == "not_requested"
 
 
-def test_cli_input_mode_writes_trace_and_profile(tmp_path, capsys):
-    """Input mode should write both JSON artifacts and completed stages."""
+def test_cli_input_mode_writes_trace_profile_and_payload(tmp_path, capsys):
+    """Input mode should write trace, profile, payload, and completed stages."""
     output_dir = tmp_path / "outputs"
 
     exit_code = main(["--input", str(SAMPLE_DATASET), "--output-dir", str(output_dir)])
 
     trace_path = output_dir / TRACE_FILE_NAME
     profile_path = output_dir / PROFILE_FILE_NAME
+    payload_path = output_dir / PAYLOAD_FILE_NAME
     assert exit_code == 0
     assert trace_path.is_file()
     assert profile_path.is_file()
+    assert payload_path.is_file()
     output = capsys.readouterr().out
     assert str(trace_path) in output
     assert str(profile_path) in output
+    assert str(payload_path) in output
 
     trace = json.loads(trace_path.read_text(encoding="utf-8"))
-    assert trace["run_status"] == "profiling_completed"
+    assert trace["run_status"] == "evidence_payload_completed"
     assert trace["stages"]["dataset_intake"] == "completed"
     assert trace["stages"]["profiling"] == "completed"
     assert trace["stages"]["context_loading"] == "not_requested"
+    assert trace["stages"]["evidence_payload"] == "completed"
     assert trace["stages"]["llm_suggestions"] == "not_implemented"
     assert "context_metadata" not in trace
     assert trace["dataset_metadata"]["file_name"] == "customers_for_test_suggestions.csv"
     assert trace["dataset_metadata"]["row_count"] == 24
     assert trace["artifact_paths"]["dataset_profile"] == str(profile_path)
+    assert trace["artifact_paths"]["test_suggestion_payload"] == str(payload_path)
+
+    payload = json.loads(payload_path.read_text(encoding="utf-8"))
+    assert payload["payload_metadata"]["contains_raw_rows"] is False
+    assert payload["authority_boundary"]["llm_called"] is False
+    assert payload["authority_boundary"]["candidate_tests_generated"] is False
+    assert payload["human_context"]["provided"] is False
+    payload_text = payload_path.read_text(encoding="utf-8")
+    assert "alex.rivera@example.com" not in payload_text
+    assert "blair.chen@example.com" not in payload_text
+    assert "CUST-0001" not in payload_text
 
     profile = json.loads(profile_path.read_text(encoding="utf-8"))
     assert profile["row_count"] == 24
@@ -70,8 +90,8 @@ def test_cli_input_mode_writes_trace_and_profile(tmp_path, capsys):
     assert "alex.rivera@example.com" not in profile_path.read_text(encoding="utf-8")
 
 
-def test_cli_input_with_context_writes_trace_metadata_and_profile(tmp_path, capsys):
-    """Input plus context mode should record context metadata in trace only."""
+def test_cli_input_with_context_writes_trace_profile_and_payload(tmp_path, capsys):
+    """Input plus context mode should write all artifacts and summarize context."""
     output_dir = tmp_path / "outputs"
 
     exit_code = main(
@@ -87,17 +107,20 @@ def test_cli_input_with_context_writes_trace_metadata_and_profile(tmp_path, caps
 
     trace_path = output_dir / TRACE_FILE_NAME
     profile_path = output_dir / PROFILE_FILE_NAME
+    payload_path = output_dir / PAYLOAD_FILE_NAME
     assert exit_code == 0
     assert trace_path.is_file()
     assert profile_path.is_file()
+    assert payload_path.is_file()
     assert str(trace_path) in capsys.readouterr().out
 
     trace = json.loads(trace_path.read_text(encoding="utf-8"))
     assert trace["stages"]["dataset_intake"] == "completed"
     assert trace["stages"]["profiling"] == "completed"
     assert trace["stages"]["context_loading"] == "completed"
-    assert trace["stages"]["evidence_payload"] == "not_implemented"
+    assert trace["stages"]["evidence_payload"] == "completed"
     assert trace["stages"]["llm_suggestions"] == "not_implemented"
+    assert trace["artifact_paths"]["test_suggestion_payload"] == str(payload_path)
     context_metadata = trace["context_metadata"]
     assert context_metadata["context_path"] == str(SAMPLE_CONTEXT)
     assert context_metadata["context_file_name"] == SAMPLE_CONTEXT.name
@@ -107,6 +130,13 @@ def test_cli_input_with_context_writes_trace_metadata_and_profile(tmp_path, caps
     assert context_metadata["referenced_field_count"] == 8
     assert context_metadata["missing_context_fields"] == []
     assert context_metadata["context_warning_count"] == 0
+
+    payload = json.loads(payload_path.read_text(encoding="utf-8"))
+    assert payload["human_context"]["provided"] is True
+    assert payload["human_context"]["dataset_name"] == "synthetic_customer_dataset"
+    assert payload["human_context"]["preferred_strictness"] == "standard"
+    assert payload["human_context"]["business_caveat_count"] == 2
+    assert payload["human_context"]["field_note_count"] == 2
 
     profile = json.loads(profile_path.read_text(encoding="utf-8"))
     assert profile["row_count"] == 24
@@ -190,6 +220,7 @@ def test_cli_invalid_context_fails_cleanly(tmp_path, capsys):
     assert "Invalid preferred_strictness" in captured.err
     assert "Traceback" not in captured.err
     assert not (tmp_path / "outputs" / PROFILE_FILE_NAME).exists()
+    assert not (tmp_path / "outputs" / PAYLOAD_FILE_NAME).exists()
 
 
 def test_cli_unsupported_extension_fails_cleanly(tmp_path, capsys):
@@ -204,6 +235,7 @@ def test_cli_unsupported_extension_fails_cleanly(tmp_path, capsys):
     assert "Unsupported input file extension" in captured.err
     assert "Traceback" not in captured.err
     assert not (tmp_path / "outputs" / PROFILE_FILE_NAME).exists()
+    assert not (tmp_path / "outputs" / PAYLOAD_FILE_NAME).exists()
 
 
 def test_cli_csv_with_sheet_fails_cleanly(tmp_path, capsys):
@@ -218,6 +250,7 @@ def test_cli_csv_with_sheet_fails_cleanly(tmp_path, capsys):
     assert "--sheet can only be used" in captured.err
     assert "Traceback" not in captured.err
     assert not (tmp_path / "outputs" / PROFILE_FILE_NAME).exists()
+    assert not (tmp_path / "outputs" / PAYLOAD_FILE_NAME).exists()
 
 
 def test_help_works(capsys):

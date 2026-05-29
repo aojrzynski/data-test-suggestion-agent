@@ -1,6 +1,8 @@
 # Data Test Suggestion Agent
 
-Data Test Suggestion Agent is a local-first Python CLI project that will eventually help answer:
+A local-first Python CLI scaffold for a future data test suggestion workflow.
+
+The project is intended to eventually help answer:
 
 > What data tests should we add for this dataset?
 
@@ -8,9 +10,9 @@ The intended direction is to combine deterministic evidence collection with revi
 
 ## Current status
 
-The project now supports deterministic dataset intake, safe aggregate profiling for local files, and optional human-authored YAML context loading. It can read CSV, XLSX, and XLSM inputs, then write JSON artifacts describing dataset metadata, column-level aggregate evidence, and trace-only context metadata.
+The project now supports deterministic dataset intake, safe aggregate profiling for local files, optional human-authored YAML context loading, and local safe evidence payload construction. It can read CSV, XLSX, and XLSM inputs, then write JSON artifacts describing dataset metadata, column-level aggregate evidence, trace metadata, and a local `test_suggestion_payload.json` artifact for future candidate-generation work.
 
-This version still does **not** suggest tests, call an LLM, validate candidate tests, execute tests, or produce reports. `dataset_profile.json` is safe aggregate evidence for later review workflows, not raw data and not a decision about which tests are correct or complete. Human-authored context can record dataset meaning, but it does not cause test suggestions yet.
+This version still does **not** suggest tests, call an LLM, validate candidate tests, execute tests, or produce reports. `test_suggestion_payload.json` is local reviewable evidence for a future workflow; it is not sent anywhere in this PR, and no OpenAI or other LLM dependency is included. The payload explicitly records that no LLM was called and no candidate tests were generated.
 
 ## What is implemented
 
@@ -22,14 +24,14 @@ This version still does **not** suggest tests, call an LLM, validate candidate t
 - optional YAML context loading with `--context`
 - dataset metadata capture
 - safe aggregate profiling in `dataset_profile.json`
-- trace metadata for dataset intake, profiling, and context-loading stages
-- pytest coverage for intake, profiling, context loading, and CLI behavior
+- local safe evidence payload construction in `test_suggestion_payload.json`
+- trace metadata for dataset intake, profiling, context-loading, and evidence-payload stages
+- pytest coverage for intake, profiling, context loading, evidence payloads, and CLI behavior
 
 ## What is intentionally not implemented yet
 
 This version does not include:
 
-- evidence payload construction for an LLM
 - OpenAI or other LLM calls
 - candidate test models
 - test suggestion generation
@@ -68,7 +70,7 @@ Run no-input scaffold mode:
 data-test-suggestion-agent --output-dir outputs
 ```
 
-Profile the synthetic customer sample dataset:
+Profile the synthetic customer sample dataset and build the local evidence payload:
 
 ```bash
 data-test-suggestion-agent \
@@ -76,7 +78,7 @@ data-test-suggestion-agent \
   --output-dir outputs
 ```
 
-Profile the synthetic customer sample dataset with human-authored context:
+Profile the synthetic customer sample dataset with human-authored context included in the local evidence payload:
 
 ```bash
 data-test-suggestion-agent \
@@ -96,28 +98,39 @@ data-test-suggestion-agent \
 
 ## Expected output artifacts
 
-A no-input scaffold run creates:
+A no-input scaffold run creates only:
 
 ```text
 outputs/data_test_trace.json
 ```
 
-A dataset profiling run creates:
+A dataset profiling run without context creates:
 
 ```text
 outputs/data_test_trace.json
 outputs/dataset_profile.json
+outputs/test_suggestion_payload.json
 ```
 
-`data_test_trace.json` records the run status, package metadata, artifact paths, and stage status. In profiling mode, `dataset_intake` and `profiling` are marked `completed`. When `--context` is provided, `context_loading` is marked `completed` and trace metadata records the context path, context file name, optional dataset name, preferred strictness, referenced-field count, and any missing context fields for review. Without `--context`, `context_loading` is marked `not_requested`. Later stages such as evidence payload construction, LLM suggestions, validation, execution, and reporting remain `not_implemented`.
+A dataset profiling run with `--context` creates the same three artifacts:
 
-`dataset_profile.json` contains aggregate evidence such as row count, column count, column names, pandas dtypes, null counts, unique counts, numeric bounds/means, text length statistics, date parse statistics, and cautious deterministic candidate hints. It intentionally avoids raw rows, example values, top values, and distinct value lists. Human-authored context is not written into `dataset_profile.json`; it is represented in `data_test_trace.json` for now.
+```text
+outputs/data_test_trace.json
+outputs/dataset_profile.json
+outputs/test_suggestion_payload.json
+```
+
+`data_test_trace.json` records the run status, package metadata, artifact paths, and stage status. In input mode, `dataset_intake`, `profiling`, and `evidence_payload` are marked `completed`. When `--context` is provided, `context_loading` is marked `completed` and trace metadata records the context path, context file name, optional dataset name, preferred strictness, referenced-field count, and any missing context fields for review. Without `--context`, `context_loading` is marked `not_requested`. Later stages such as LLM suggestions, validation, execution, and reporting remain `not_implemented`.
+
+`dataset_profile.json` contains deterministic aggregate evidence such as row count, column count, column names, pandas dtypes, null counts, unique counts, numeric bounds/means, text length statistics, date parse statistics, and cautious deterministic candidate hints. It intentionally avoids raw rows, example values, top values, and distinct value lists. Human-authored context is not written into `dataset_profile.json`; keeping it separate preserves the distinction between deterministic source-data profile evidence and reviewer-authored metadata.
+
+`test_suggestion_payload.json` combines dataset metadata, safe aggregate profile evidence, optional human-authored context summary, and explicit authority/safety boundaries. It is local evidence for future bounded candidate test generation only. In this PR, it is not sent anywhere, no LLM is called, and no candidate tests are generated. The payload does not contain raw rows, example values, top values, distinct value lists, sampled records, or source data previews.
 
 ## Optional YAML context
 
 A context file lets a human reviewer describe dataset meaning that deterministic profiling cannot infer reliably, such as expected grain, important fields, known ID/date/categorical fields, business caveats, fields to ignore, and preferred strictness. This context is useful groundwork for later reviewable test-suggestion stages, but the current CLI only loads, validates, summarizes, and records it. It does not generate tests or decide that any test is correct or complete.
 
-If `preferred_strictness` is omitted from context YAML, the loader defaults it to `cautious`. Allowed values are `cautious`, `standard`, and `strict`. Fields referenced by context are checked against the loaded dataset columns. Missing references are recorded as `missing_context_fields` warnings in `data_test_trace.json` instead of failing the run, because they may reflect stale context, renamed columns, or a subset extract rather than a dataset defect.
+If `preferred_strictness` is omitted from context YAML, the loader defaults it to `cautious`. Allowed values are `cautious`, `standard`, and `strict`. Fields referenced by context are checked against the loaded dataset columns. Missing references are recorded as `missing_context_fields` warnings in `data_test_trace.json` and `test_suggestion_payload.json` instead of failing the run, because they may reflect stale context, renamed columns, or a subset extract rather than a dataset defect.
 
 Expected clean user errors include:
 
@@ -129,4 +142,4 @@ Expected clean user errors include:
 
 This project is designed around human review. Future versions may generate candidate tests, but those candidates should be treated as suggestions for review. The tool should not claim that suggested tests are complete, correct, or approved without human decision-making.
 
-The current implementation does not send raw rows to any model, does not call an LLM, does not execute arbitrary code, and does not make legal, privacy, or compliance verdicts.
+The current implementation does not send raw rows to any model, does not call an LLM, does not execute arbitrary code, does not generate candidate tests, and does not make legal, privacy, or compliance verdicts.

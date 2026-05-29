@@ -1,8 +1,8 @@
-"""Command-line interface for local dataset intake, profiling, and context loading.
+"""Command-line interface for local intake, profiling, context, and payloads.
 
-PR #3 adds optional human-authored YAML context loading. The CLI still does not
-call an LLM, generate candidate tests, validate suggestions, execute tests, or
-write reports.
+PR #4 adds deterministic safe evidence payload construction. The CLI still does
+not call an LLM, generate candidate tests, validate suggestions, execute tests,
+or write reports.
 """
 
 from __future__ import annotations
@@ -18,8 +18,10 @@ from data_test_suggestion_agent.context_loader import (
     load_context,
     summarize_context,
 )
+from data_test_suggestion_agent.evidence_payload import build_test_suggestion_payload
 from data_test_suggestion_agent.intake import IntakeError, load_dataset
 from data_test_suggestion_agent.output_writers import (
+    PAYLOAD_FILE_NAME,
     PROFILE_FILE_NAME,
     TRACE_FILE_NAME,
     write_json_artifact,
@@ -100,6 +102,7 @@ def build_profile_trace(
     metadata: dict[str, object],
     trace_path: Path,
     profile_path: Path,
+    payload_path: Path,
     context_metadata: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Return a trace payload for a completed intake/profile run."""
@@ -109,6 +112,7 @@ def build_profile_trace(
     stages["context_loading"] = (
         "completed" if context_metadata is not None else "not_requested"
     )
+    stages["evidence_payload"] = "completed"
 
     # Context can inform later review workflows, but it is not a test suggestion
     # and is intentionally kept out of dataset_profile.json.
@@ -116,15 +120,16 @@ def build_profile_trace(
         "agent_name": AGENT_NAME,
         "package_name": PACKAGE_NAME,
         "package_version": __version__,
-        "run_status": "profiling_completed",
+        "run_status": "evidence_payload_completed",
         "message": (
-            "Dataset intake and safe aggregate profiling completed. No test "
-            "suggestions were generated."
+            "Dataset intake, safe aggregate profiling, and local evidence payload "
+            "construction completed. No test suggestions were generated."
         ),
         "dataset_metadata": metadata,
         "artifact_paths": {
             "trace": str(trace_path),
             "dataset_profile": str(profile_path),
+            "test_suggestion_payload": str(payload_path),
         },
         "stages": stages,
     }
@@ -181,6 +186,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         ingested = load_dataset(args.input, sheet_name=args.sheet)
         profile = profile_dataset(ingested.dataframe, ingested.metadata)
+        context = None
         context_metadata = None
         if args.context is not None:
             context = load_context(args.context)
@@ -194,18 +200,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
     profile_path = write_json_artifact(output_dir, PROFILE_FILE_NAME, profile.to_dict())
+    payload = build_test_suggestion_payload(
+        profile=profile,
+        context=context,
+        context_metadata=context_metadata,
+    )
+    payload_path = write_json_artifact(output_dir, PAYLOAD_FILE_NAME, payload)
     trace_path = output_dir / TRACE_FILE_NAME
     trace = build_profile_trace(
         metadata=ingested.metadata.to_dict(),
         trace_path=trace_path,
         profile_path=profile_path,
+        payload_path=payload_path,
         context_metadata=context_metadata,
     )
     write_json_artifact(output_dir, TRACE_FILE_NAME, trace)
 
     print(
-        "Dataset intake and safe profiling completed. "
-        f"Trace written to {trace_path}. Profile written to {profile_path}."
+        "Dataset intake, safe profiling, and evidence payload construction completed. "
+        f"Trace written to {trace_path}. Profile written to {profile_path}. "
+        f"Payload written to {payload_path}."
     )
     return 0
 
