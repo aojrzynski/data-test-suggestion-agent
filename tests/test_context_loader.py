@@ -161,7 +161,7 @@ field_notes:
     )
 
     assert summary["context_loading"] == "completed"
-    assert summary["referenced_field_count"] == 5
+    assert summary["referenced_field_count"] == 6
     assert summary["missing_context_fields"] == ["missing_column", "missing_note_field", "stale_internal_field"]
     assert summary["context_warning_count"] == 1
     assert summary["warnings"][0]["warning_type"] == "missing_context_fields"
