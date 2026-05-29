@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "data-test-suggestion-agent"
+version = "0.1.0"
+description = "A local-first scaffold for future reviewable data test suggestions."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+  { name = "Adam Ojrzynski" }
+]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "License :: OSI Approved :: MIT License",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+]
+
+[project.scripts]
+data-test-suggestion-agent = "data_test_suggestion_agent.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
