@@ -1,8 +1,8 @@
-"""Command-line interface for local dataset intake and safe profiling.
+"""Command-line interface for local dataset intake, profiling, and context loading.
 
-PR #2 adds deterministic CSV/XLSX/XLSM intake and aggregate-only profiling. It
-still does not load YAML context, call an LLM, generate candidate tests,
-validate suggestions, execute tests, or write reports.
+PR #3 adds optional human-authored YAML context loading. The CLI still does not
+call an LLM, generate candidate tests, validate suggestions, execute tests, or
+write reports.
 """
 
 from __future__ import annotations
@@ -13,8 +13,17 @@ from pathlib import Path
 from typing import Sequence
 
 from data_test_suggestion_agent import __version__
+from data_test_suggestion_agent.context_loader import (
+    ContextLoadError,
+    load_context,
+    summarize_context,
+)
 from data_test_suggestion_agent.intake import IntakeError, load_dataset
-from data_test_suggestion_agent.output_writers import PROFILE_FILE_NAME, TRACE_FILE_NAME, write_json_artifact
+from data_test_suggestion_agent.output_writers import (
+    PROFILE_FILE_NAME,
+    TRACE_FILE_NAME,
+    write_json_artifact,
+)
 from data_test_suggestion_agent.profiling import profile_dataset
 
 AGENT_NAME = "data-test-suggestion-agent"
@@ -23,15 +32,6 @@ PACKAGE_NAME = "data_test_suggestion_agent"
 FUTURE_STAGES = (
     "dataset_intake",
     "profiling",
-    "context_loading",
-    "evidence_payload",
-    "llm_suggestions",
-    "suggestion_validation",
-    "test_execution",
-    "reporting",
-)
-
-NOT_IMPLEMENTED_STAGES = (
     "context_loading",
     "evidence_payload",
     "llm_suggestions",
@@ -59,6 +59,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Excel sheet name to load. Only valid for .xlsx and .xlsm inputs.",
     )
     parser.add_argument(
+        "--context",
+        help="Path to an optional human-authored YAML dataset context file.",
+    )
+    parser.add_argument(
         "--output-dir",
         default="outputs",
         help="Directory where JSON artifacts will be written.",
@@ -76,6 +80,7 @@ def build_scaffold_trace() -> dict[str, object]:
     stages = {stage: "not_implemented" for stage in FUTURE_STAGES}
     stages["dataset_intake"] = "not_requested"
     stages["profiling"] = "not_requested"
+    stages["context_loading"] = "not_requested"
     return {
         "agent_name": AGENT_NAME,
         "package_name": PACKAGE_NAME,
@@ -95,12 +100,19 @@ def build_profile_trace(
     metadata: dict[str, object],
     trace_path: Path,
     profile_path: Path,
+    context_metadata: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Return a trace payload for a completed intake/profile run."""
-    stages = {stage: "not_implemented" for stage in NOT_IMPLEMENTED_STAGES}
+    stages = {stage: "not_implemented" for stage in FUTURE_STAGES}
     stages["dataset_intake"] = "completed"
     stages["profiling"] = "completed"
-    return {
+    stages["context_loading"] = (
+        "completed" if context_metadata is not None else "not_requested"
+    )
+
+    # Context can inform later review workflows, but it is not a test suggestion
+    # and is intentionally kept out of dataset_profile.json.
+    trace: dict[str, object] = {
         "agent_name": AGENT_NAME,
         "package_name": PACKAGE_NAME,
         "package_version": __version__,
@@ -116,6 +128,9 @@ def build_profile_trace(
         },
         "stages": stages,
     }
+    if context_metadata is not None:
+        trace["context_metadata"] = context_metadata
+    return trace
 
 
 def build_trace() -> dict[str, object]:
@@ -147,6 +162,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     output_dir = Path(args.output_dir)
 
     if args.input is None:
+        if args.sheet is not None:
+            print(
+                "Error: --sheet requires --input and is only valid for Excel inputs.",
+                file=sys.stderr,
+            )
+            return 2
+        if args.context is not None:
+            print(
+                "Error: --context requires --input so context can be checked against dataset columns.",
+                file=sys.stderr,
+            )
+            return 2
         trace_path = write_scaffold_trace(output_dir)
         print(f"Scaffold run completed. Trace written to {trace_path}.")
         return 0
@@ -154,7 +181,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         ingested = load_dataset(args.input, sheet_name=args.sheet)
         profile = profile_dataset(ingested.dataframe, ingested.metadata)
-    except IntakeError as exc:
+        context_metadata = None
+        if args.context is not None:
+            context = load_context(args.context)
+            context_metadata = summarize_context(
+                context=context,
+                context_path=args.context,
+                dataset_columns=ingested.metadata.columns,
+            )
+    except (IntakeError, ContextLoadError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 2
 
@@ -164,6 +199,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         metadata=ingested.metadata.to_dict(),
         trace_path=trace_path,
         profile_path=profile_path,
+        context_metadata=context_metadata,
     )
     write_json_artifact(output_dir, TRACE_FILE_NAME, trace)
 

@@ -1,0 +1,26 @@
+dataset_name: synthetic_customer_dataset
+dataset_purpose: >
+  Synthetic customer-style dataset used to demonstrate safe profiling and later
+  reviewable candidate test suggestion workflows.
+expected_grain: one row per synthetic customer
+important_fields:
+  - customer_id
+  - email
+  - signup_date
+known_id_fields:
+  - customer_id
+known_date_fields:
+  - signup_date
+  - last_order_date
+known_categorical_fields:
+  - customer_status
+  - marketing_consent
+  - country
+business_caveats:
+  - Some synthetic customers may not have placed an order yet, so last_order_date can be missing.
+  - marketing_consent may be blank when consent has not been captured in the synthetic scenario.
+fields_to_ignore: []
+preferred_strictness: standard
+field_notes:
+  customer_id: Synthetic stable customer identifier.
+  lifetime_value: Numeric customer value used for profiling demos only.

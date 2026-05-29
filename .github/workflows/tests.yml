@@ -37,3 +37,9 @@ jobs:
           test -f outputs/dataset_profile.json
           python -m json.tool outputs/data_test_trace.json
           python -m json.tool outputs/dataset_profile.json
+          rm -rf outputs
+          data-test-suggestion-agent --input sample_data/customers/customers_for_test_suggestions.csv --context config/examples/customer_dataset_context.yaml --output-dir outputs
+          test -f outputs/data_test_trace.json
+          test -f outputs/dataset_profile.json
+          python -m json.tool outputs/data_test_trace.json
+          python -m json.tool outputs/dataset_profile.json
