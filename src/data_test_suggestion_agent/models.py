@@ -24,6 +24,43 @@ class DatasetMetadata:
 
 
 @dataclass(frozen=True)
+class DatasetContext:
+    """Human-authored dataset context loaded from optional YAML.
+
+    Context captures reviewer-provided meaning such as expected grain, known
+    field roles, and caveats. It is not deterministic profile evidence and does
+    not imply that any data test should be generated, accepted, or executed.
+    """
+
+    dataset_name: str | None = None
+    dataset_purpose: str | None = None
+    expected_grain: str | None = None
+    important_fields: list[str] = field(default_factory=list)
+    known_id_fields: list[str] = field(default_factory=list)
+    known_date_fields: list[str] = field(default_factory=list)
+    known_categorical_fields: list[str] = field(default_factory=list)
+    business_caveats: list[str] = field(default_factory=list)
+    fields_to_ignore: list[str] = field(default_factory=list)
+    preferred_strictness: str | None = "cautious"
+    field_notes: dict[str, str] = field(default_factory=dict)
+
+    def referenced_fields(self) -> set[str]:
+        """Return unique dataset field names referenced by context metadata."""
+        fields: set[str] = set()
+        fields.update(self.important_fields)
+        fields.update(self.known_id_fields)
+        fields.update(self.known_date_fields)
+        fields.update(self.known_categorical_fields)
+        fields.update(self.fields_to_ignore)
+        fields.update(self.field_notes.keys())
+        return fields
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-serializable representation of the context."""
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class ColumnProfile:
     """Safe aggregate profile evidence for one dataset column.
 
