@@ -50,6 +50,9 @@ def validate_candidate_tests(
     """
     column_profiles = {column.name: column.to_dict() for column in profile.columns}
     seen_test_ids: set[str] = set()
+    # Candidate IDs are traceability keys. If a file repeats an ID, all
+    # candidates with that ID are rejected because the validator cannot safely
+    # know which duplicate should be authoritative.
     duplicate_test_ids = _duplicate_test_ids(candidate_entries)
     validated: list[ValidatedCandidate] = []
     rejected: list[RejectedCandidate] = []
