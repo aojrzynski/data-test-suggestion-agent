@@ -45,7 +45,7 @@ def build_test_suggestion_payload(
     """Return a deterministic safe evidence payload for local review.
 
     The payload is intentionally marked as not LLM-ready in this PR because no
-    prompt contract, bounded generation, candidate validation, or reviewer flow
+    prompt contract, bounded generation, execution, or reviewer approval flow
     exists yet. It gathers only aggregate profile evidence plus optional
     human-authored context summary, and it records that no candidate tests were
     generated.
@@ -173,7 +173,7 @@ def _authority_boundary() -> dict[str, Any]:
             "This payload is constructed locally and is not sent anywhere by this CLI.",
             "It contains aggregate dataset profile evidence and optional human-authored context only.",
             "It must not be treated as approved, complete, or correct test coverage.",
-            "Candidate test generation, validation, execution, and reporting are not implemented in this PR.",
+            "Candidate test generation, execution, and reporting are not implemented in this PR; manually supplied candidates may be validated separately.",
         ],
     }
 

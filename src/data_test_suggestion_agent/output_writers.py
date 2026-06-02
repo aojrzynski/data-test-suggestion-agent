@@ -9,6 +9,8 @@ from typing import Any
 TRACE_FILE_NAME = "data_test_trace.json"
 PROFILE_FILE_NAME = "dataset_profile.json"
 PAYLOAD_FILE_NAME = "test_suggestion_payload.json"
+VALIDATED_SUGGESTIONS_FILE_NAME = "validated_test_suggestions.json"
+REJECTED_SUGGESTIONS_FILE_NAME = "rejected_test_suggestions.json"
 
 
 def write_json_artifact(output_dir: Path, file_name: str, payload: dict[str, Any]) -> Path:

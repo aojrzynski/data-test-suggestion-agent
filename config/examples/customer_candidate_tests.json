@@ -1,0 +1,62 @@
+{
+  "candidate_tests": [
+    {
+      "test_id": "customer_id_not_null",
+      "test_type": "not_null",
+      "column": "customer_id",
+      "severity": "high",
+      "rationale": "customer_id is marked as an important ID field in context.",
+      "suggested_by": "manual_fixture"
+    },
+    {
+      "test_id": "customer_id_unique",
+      "test_type": "unique",
+      "column": "customer_id",
+      "severity": "high",
+      "rationale": "customer_id appears to be a likely identifier candidate.",
+      "suggested_by": "manual_fixture"
+    },
+    {
+      "test_id": "customer_status_allowed_values",
+      "test_type": "accepted_values",
+      "column": "customer_status",
+      "severity": "medium",
+      "parameters": {
+        "allowed_values": ["active", "paused", "inactive"]
+      },
+      "rationale": "customer_status is a known categorical field in the context.",
+      "suggested_by": "manual_fixture"
+    },
+    {
+      "test_id": "age_numeric_range",
+      "test_type": "numeric_range",
+      "column": "age",
+      "severity": "medium",
+      "parameters": {
+        "min": 0,
+        "max": 120
+      },
+      "rationale": "age should remain within a conservative human age range for this synthetic dataset.",
+      "suggested_by": "manual_fixture"
+    },
+    {
+      "test_id": "signup_date_parseable",
+      "test_type": "date_parseable",
+      "column": "signup_date",
+      "severity": "medium",
+      "rationale": "signup_date is listed as a known date field in context.",
+      "suggested_by": "manual_fixture"
+    },
+    {
+      "test_id": "email_regex_shape",
+      "test_type": "regex_match",
+      "column": "email",
+      "severity": "low",
+      "parameters": {
+        "pattern": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
+      },
+      "rationale": "email should have a basic email-like shape before future review.",
+      "suggested_by": "manual_fixture"
+    }
+  ]
+}
