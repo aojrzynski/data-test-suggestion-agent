@@ -121,3 +121,34 @@ def test_context_fields_to_ignore_can_reject_candidate(profile, context):
 
     assert result.rejected_count == 1
     assert result.rejected_candidates[0].rejection_reasons[0].reason_code == "column_marked_to_ignore"
+
+
+def test_duplicate_test_ids_make_all_duplicate_candidates_invalid(profile):
+    """Every candidate sharing a duplicated test_id should be rejected for traceability."""
+    candidates = [
+        {
+            "test_id": "duplicate_id",
+            "test_type": "not_null",
+            "column": "customer_id",
+            "severity": "high",
+            "rationale": "first duplicate",
+            "suggested_by": "manual_fixture",
+        },
+        {
+            "test_id": "duplicate_id",
+            "test_type": "unique",
+            "column": "customer_id",
+            "severity": "high",
+            "rationale": "second duplicate",
+            "suggested_by": "manual_fixture",
+        },
+    ]
+
+    result = validate_candidate_tests(candidate_entries=candidates, profile=profile)
+
+    assert result.validated_count == 0
+    assert result.rejected_count == 2
+    assert all(
+        any(reason.reason_code == "duplicate_test_id" for reason in rejected.rejection_reasons)
+        for rejected in result.rejected_candidates
+    )
