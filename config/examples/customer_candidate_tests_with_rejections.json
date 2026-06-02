@@ -1,0 +1,76 @@
+{
+  "candidate_tests": [
+    {
+      "test_id": "customer_id_not_null",
+      "test_type": "not_null",
+      "column": "customer_id",
+      "severity": "high",
+      "rationale": "customer_id is marked as an important ID field in context.",
+      "suggested_by": "manual_fixture"
+    },
+    {
+      "test_id": "customer_id_unique",
+      "test_type": "unique",
+      "column": "customer_id",
+      "severity": "high",
+      "rationale": "customer_id appears to be a likely identifier candidate.",
+      "suggested_by": "manual_fixture"
+    },
+    {
+      "test_id": "customer_status_allowed_values",
+      "test_type": "accepted_values",
+      "column": "customer_status",
+      "severity": "medium",
+      "parameters": {
+        "allowed_values": ["active", "paused", "inactive"]
+      },
+      "rationale": "customer_status is a known categorical field in the context.",
+      "suggested_by": "manual_fixture"
+    },
+    {
+      "test_id": "unknown_column_not_null",
+      "test_type": "not_null",
+      "column": "missing_customer_field",
+      "severity": "medium",
+      "rationale": "This intentionally references a missing synthetic field.",
+      "suggested_by": "manual_fixture"
+    },
+    {
+      "test_id": "unknown_test_type",
+      "test_type": "made_up_test",
+      "column": "customer_id",
+      "severity": "medium",
+      "rationale": "This intentionally uses an unsupported test type.",
+      "suggested_by": "manual_fixture"
+    },
+    {
+      "test_id": "email_numeric_range",
+      "test_type": "numeric_range",
+      "column": "email",
+      "severity": "low",
+      "parameters": {
+        "min": 1,
+        "max": 10
+      },
+      "rationale": "This intentionally applies a numeric range to a text-like field.",
+      "suggested_by": "manual_fixture"
+    },
+    {
+      "test_id": "unsafe_code_candidate",
+      "test_type": "not_null",
+      "column": "customer_id",
+      "severity": "high",
+      "rationale": "This intentionally includes a forbidden execution field.",
+      "suggested_by": "manual_fixture",
+      "code": "print('do not execute')"
+    },
+    {
+      "test_id": "customer_id_unique",
+      "test_type": "unique",
+      "column": "email",
+      "severity": "medium",
+      "rationale": "This intentionally duplicates an existing test_id.",
+      "suggested_by": "manual_fixture"
+    }
+  ]
+}

@@ -31,19 +31,41 @@ jobs:
           data-test-suggestion-agent --output-dir outputs
           test -f outputs/data_test_trace.json
           python -m json.tool outputs/data_test_trace.json
+          test ! -f outputs/dataset_profile.json
+          test ! -f outputs/test_suggestion_payload.json
+          test ! -f outputs/validated_test_suggestions.json
+          test ! -f outputs/rejected_test_suggestions.json
           rm -rf outputs
           data-test-suggestion-agent --input sample_data/customers/customers_for_test_suggestions.csv --output-dir outputs
           test -f outputs/data_test_trace.json
           test -f outputs/dataset_profile.json
           test -f outputs/test_suggestion_payload.json
+          test ! -f outputs/validated_test_suggestions.json
+          test ! -f outputs/rejected_test_suggestions.json
           python -m json.tool outputs/data_test_trace.json
           python -m json.tool outputs/dataset_profile.json
           python -m json.tool outputs/test_suggestion_payload.json
           rm -rf outputs
-          data-test-suggestion-agent --input sample_data/customers/customers_for_test_suggestions.csv --context config/examples/customer_dataset_context.yaml --output-dir outputs
+          data-test-suggestion-agent --input sample_data/customers/customers_for_test_suggestions.csv --context config/examples/customer_dataset_context.yaml --candidates config/examples/customer_candidate_tests.json --output-dir outputs
           test -f outputs/data_test_trace.json
           test -f outputs/dataset_profile.json
           test -f outputs/test_suggestion_payload.json
+          test -f outputs/validated_test_suggestions.json
+          test -f outputs/rejected_test_suggestions.json
           python -m json.tool outputs/data_test_trace.json
           python -m json.tool outputs/dataset_profile.json
           python -m json.tool outputs/test_suggestion_payload.json
+          python -m json.tool outputs/validated_test_suggestions.json
+          python -m json.tool outputs/rejected_test_suggestions.json
+          rm -rf outputs
+          data-test-suggestion-agent --input sample_data/customers/customers_for_test_suggestions.csv --context config/examples/customer_dataset_context.yaml --candidates config/examples/customer_candidate_tests_with_rejections.json --output-dir outputs
+          test -f outputs/data_test_trace.json
+          test -f outputs/dataset_profile.json
+          test -f outputs/test_suggestion_payload.json
+          test -f outputs/validated_test_suggestions.json
+          test -f outputs/rejected_test_suggestions.json
+          python -m json.tool outputs/data_test_trace.json
+          python -m json.tool outputs/dataset_profile.json
+          python -m json.tool outputs/test_suggestion_payload.json
+          python -m json.tool outputs/validated_test_suggestions.json
+          python -m json.tool outputs/rejected_test_suggestions.json

@@ -12,11 +12,15 @@ from data_test_suggestion_agent.cli import FUTURE_STAGES, main
 from data_test_suggestion_agent.output_writers import (
     PAYLOAD_FILE_NAME,
     PROFILE_FILE_NAME,
+    REJECTED_SUGGESTIONS_FILE_NAME,
     TRACE_FILE_NAME,
+    VALIDATED_SUGGESTIONS_FILE_NAME,
 )
 
 SAMPLE_DATASET = Path("sample_data/customers/customers_for_test_suggestions.csv")
 SAMPLE_CONTEXT = Path("config/examples/customer_dataset_context.yaml")
+VALID_CANDIDATES = Path("config/examples/customer_candidate_tests.json")
+MIXED_CANDIDATES = Path("config/examples/customer_candidate_tests_with_rejections.json")
 
 
 def test_cli_writes_scaffold_trace_without_profile(tmp_path, capsys):
@@ -31,6 +35,8 @@ def test_cli_writes_scaffold_trace_without_profile(tmp_path, capsys):
     assert trace_path.is_file()
     assert not (output_dir / PROFILE_FILE_NAME).exists()
     assert not (output_dir / PAYLOAD_FILE_NAME).exists()
+    assert not (output_dir / VALIDATED_SUGGESTIONS_FILE_NAME).exists()
+    assert not (output_dir / REJECTED_SUGGESTIONS_FILE_NAME).exists()
     assert str(trace_path) in capsys.readouterr().out
 
     trace = json.loads(trace_path.read_text(encoding="utf-8"))
@@ -41,6 +47,8 @@ def test_cli_writes_scaffold_trace_without_profile(tmp_path, capsys):
     assert trace["stages"]["dataset_intake"] == "not_requested"
     assert trace["stages"]["profiling"] == "not_requested"
     assert trace["stages"]["context_loading"] == "not_requested"
+    assert trace["stages"]["candidate_loading"] == "not_requested"
+    assert trace["stages"]["suggestion_validation"] == "not_requested"
 
 
 def test_cli_input_mode_writes_trace_profile_and_payload(tmp_path, capsys):
@@ -56,6 +64,8 @@ def test_cli_input_mode_writes_trace_profile_and_payload(tmp_path, capsys):
     assert trace_path.is_file()
     assert profile_path.is_file()
     assert payload_path.is_file()
+    assert not (output_dir / VALIDATED_SUGGESTIONS_FILE_NAME).exists()
+    assert not (output_dir / REJECTED_SUGGESTIONS_FILE_NAME).exists()
     output = capsys.readouterr().out
     assert str(trace_path) in output
     assert str(profile_path) in output
@@ -67,6 +77,8 @@ def test_cli_input_mode_writes_trace_profile_and_payload(tmp_path, capsys):
     assert trace["stages"]["profiling"] == "completed"
     assert trace["stages"]["context_loading"] == "not_requested"
     assert trace["stages"]["evidence_payload"] == "completed"
+    assert trace["stages"]["candidate_loading"] == "not_requested"
+    assert trace["stages"]["suggestion_validation"] == "not_requested"
     assert trace["stages"]["llm_suggestions"] == "not_implemented"
     assert "context_metadata" not in trace
     assert trace["dataset_metadata"]["file_name"] == "customers_for_test_suggestions.csv"
@@ -263,6 +275,7 @@ def test_help_works(capsys):
     assert "--input" in output
     assert "--sheet" in output
     assert "--context" in output
+    assert "--candidates" in output
     assert "--output-dir" in output
 
 
@@ -275,3 +288,182 @@ def test_version_works(capsys):
     output = capsys.readouterr().out
     assert "data-test-suggestion-agent" in output
     assert __version__ in output
+
+
+def test_cli_input_with_candidates_writes_validation_artifacts(tmp_path):
+    """Input plus candidates should write validation artifacts and trace counts."""
+    output_dir = tmp_path / "outputs"
+
+    exit_code = main(
+        [
+            "--input",
+            str(SAMPLE_DATASET),
+            "--candidates",
+            str(VALID_CANDIDATES),
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 0
+    for file_name in (
+        TRACE_FILE_NAME,
+        PROFILE_FILE_NAME,
+        PAYLOAD_FILE_NAME,
+        VALIDATED_SUGGESTIONS_FILE_NAME,
+        REJECTED_SUGGESTIONS_FILE_NAME,
+    ):
+        assert (output_dir / file_name).is_file()
+        json.loads((output_dir / file_name).read_text(encoding="utf-8"))
+
+    trace = json.loads((output_dir / TRACE_FILE_NAME).read_text(encoding="utf-8"))
+    assert trace["stages"]["candidate_loading"] == "completed"
+    assert trace["stages"]["suggestion_validation"] == "completed"
+    assert trace["stages"]["test_execution"] == "not_implemented"
+    assert trace["candidate_validation"]["input_candidate_count"] == 6
+    assert trace["candidate_validation"]["validated_candidate_count"] == 6
+    assert trace["candidate_validation"]["rejected_candidate_count"] == 0
+
+    validated = json.loads(
+        (output_dir / VALIDATED_SUGGESTIONS_FILE_NAME).read_text(encoding="utf-8")
+    )
+    assert validated["candidate_tests_generated_by_this_agent"] is False
+    assert validated["llm_called"] is False
+    assert validated["validated_candidates_are_approved_tests"] is False
+    assert validated["tests_executed"] is False
+
+
+def test_cli_input_with_context_and_candidates_writes_all_five_artifacts(tmp_path):
+    """Context can add validation notes without changing the artifact set."""
+    output_dir = tmp_path / "outputs"
+
+    exit_code = main(
+        [
+            "--input",
+            str(SAMPLE_DATASET),
+            "--context",
+            str(SAMPLE_CONTEXT),
+            "--candidates",
+            str(VALID_CANDIDATES),
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 0
+    assert (output_dir / VALIDATED_SUGGESTIONS_FILE_NAME).is_file()
+    assert (output_dir / REJECTED_SUGGESTIONS_FILE_NAME).is_file()
+    trace = json.loads((output_dir / TRACE_FILE_NAME).read_text(encoding="utf-8"))
+    assert trace["stages"]["context_loading"] == "completed"
+    assert trace["stages"]["suggestion_validation"] == "completed"
+    assert trace["artifact_paths"]["validated_test_suggestions"] == str(
+        output_dir / VALIDATED_SUGGESTIONS_FILE_NAME
+    )
+
+
+def test_cli_candidates_without_input_fails_cleanly(tmp_path, capsys):
+    """--candidates should require --input and avoid scaffold mode."""
+    exit_code = main(
+        ["--candidates", str(VALID_CANDIDATES), "--output-dir", str(tmp_path / "outputs")]
+    )
+
+    assert exit_code != 0
+    captured = capsys.readouterr()
+    assert "--candidates requires --input" in captured.err
+    assert "Traceback" not in captured.err
+    assert not (tmp_path / "outputs" / TRACE_FILE_NAME).exists()
+
+
+def test_cli_invalid_candidate_json_fails_cleanly(tmp_path, capsys):
+    """Invalid candidate JSON should fail without validation artifacts or traceback."""
+    candidate_path = tmp_path / "bad_candidates.json"
+    candidate_path.write_text("{not json", encoding="utf-8")
+    output_dir = tmp_path / "outputs"
+
+    exit_code = main(
+        [
+            "--input",
+            str(SAMPLE_DATASET),
+            "--candidates",
+            str(candidate_path),
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code != 0
+    captured = capsys.readouterr()
+    assert "Malformed candidate JSON" in captured.err
+    assert "Traceback" not in captured.err
+    assert not (output_dir / VALIDATED_SUGGESTIONS_FILE_NAME).exists()
+    assert not (output_dir / REJECTED_SUGGESTIONS_FILE_NAME).exists()
+
+
+def test_cli_mixed_candidates_exit_zero_and_write_rejections(tmp_path):
+    """Mixed candidate fixtures should complete validation even with rejections."""
+    output_dir = tmp_path / "outputs"
+
+    exit_code = main(
+        [
+            "--input",
+            str(SAMPLE_DATASET),
+            "--context",
+            str(SAMPLE_CONTEXT),
+            "--candidates",
+            str(MIXED_CANDIDATES),
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 0
+    rejected = json.loads(
+        (output_dir / REJECTED_SUGGESTIONS_FILE_NAME).read_text(encoding="utf-8")
+    )
+    assert rejected["summary"]["validated_count"] == 2
+    assert rejected["summary"]["rejected_count"] == 6
+    reason_codes = {
+        reason["reason_code"]
+        for candidate in rejected["rejected_candidates"]
+        for reason in candidate["rejection_reasons"]
+    }
+    assert "unknown_column" in reason_codes
+    assert "unsupported_test_type" in reason_codes
+    assert "profile_type_mismatch" in reason_codes
+    assert "suspicious_execution_field" in reason_codes
+    assert "duplicate_test_id" in reason_codes
+
+
+def test_validated_and_rejected_artifacts_do_not_include_raw_dataset_samples(tmp_path):
+    """Validation artifacts should not leak source row samples from the dataset."""
+    output_dir = tmp_path / "outputs"
+
+    assert (
+        main(
+            [
+                "--input",
+                str(SAMPLE_DATASET),
+                "--candidates",
+                str(VALID_CANDIDATES),
+                "--output-dir",
+                str(output_dir),
+            ]
+        )
+        == 0
+    )
+
+    validation_text = (
+        (output_dir / VALIDATED_SUGGESTIONS_FILE_NAME).read_text(encoding="utf-8")
+        + (output_dir / REJECTED_SUGGESTIONS_FILE_NAME).read_text(encoding="utf-8")
+    )
+    assert "alex.rivera@example.com" not in validation_text
+    assert "blair.chen@example.com" not in validation_text
+    assert "CUST-0001" not in validation_text
+
+
+def test_project_does_not_add_llm_or_openai_dependency():
+    """Runtime dependencies should not include OpenAI or other LLM packages yet."""
+    pyproject_text = Path("pyproject.toml").read_text(encoding="utf-8").lower()
+
+    assert "openai" not in pyproject_text
+    assert "llm" not in pyproject_text
