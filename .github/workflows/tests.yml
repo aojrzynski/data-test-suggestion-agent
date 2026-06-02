@@ -74,6 +74,13 @@ jobs:
           python -m json.tool outputs/validated_test_suggestions.json
           python -m json.tool outputs/rejected_test_suggestions.json
           python -m json.tool outputs/test_execution_results.json
+
+          rm -rf outputs
+          if data-test-suggestion-agent --input sample_data/customers/customers_for_test_suggestions.csv --generate-candidates --output-dir outputs; then
+            echo "Expected --generate-candidates without model/API key to fail"
+            exit 1
+          fi
+          test ! -f outputs/llm_candidate_tests.json
           rm -rf outputs
           data-test-suggestion-agent --input sample_data/customers/customers_for_test_suggestions.csv --context config/examples/customer_dataset_context.yaml --candidates config/examples/customer_candidate_tests_with_rejections.json --execute-candidates --output-dir outputs
           test -f outputs/data_test_trace.json

@@ -13,6 +13,7 @@ from data_test_suggestion_agent.output_writers import (
     PAYLOAD_FILE_NAME,
     PROFILE_FILE_NAME,
     REJECTED_SUGGESTIONS_FILE_NAME,
+    LLM_CANDIDATE_TESTS_FILE_NAME,
     TEST_EXECUTION_RESULTS_FILE_NAME,
     TRACE_FILE_NAME,
     VALIDATED_SUGGESTIONS_FILE_NAME,
@@ -84,7 +85,7 @@ def test_cli_input_mode_writes_trace_profile_and_payload(tmp_path, capsys):
     assert trace["stages"]["candidate_loading"] == "not_requested"
     assert trace["stages"]["suggestion_validation"] == "not_requested"
     assert trace["stages"]["test_execution"] == "not_requested"
-    assert trace["stages"]["llm_suggestions"] == "not_implemented"
+    assert trace["stages"]["llm_suggestions"] == "not_requested"
     assert "context_metadata" not in trace
     assert trace["dataset_metadata"]["file_name"] == "customers_for_test_suggestions.csv"
     assert trace["dataset_metadata"]["row_count"] == 24
@@ -136,7 +137,7 @@ def test_cli_input_with_context_writes_trace_profile_and_payload(tmp_path, capsy
     assert trace["stages"]["profiling"] == "completed"
     assert trace["stages"]["context_loading"] == "completed"
     assert trace["stages"]["evidence_payload"] == "completed"
-    assert trace["stages"]["llm_suggestions"] == "not_implemented"
+    assert trace["stages"]["llm_suggestions"] == "not_requested"
     assert trace["artifact_paths"]["test_suggestion_payload"] == str(payload_path)
     context_metadata = trace["context_metadata"]
     assert context_metadata["context_path"] == str(SAMPLE_CONTEXT)
@@ -468,12 +469,14 @@ def test_validated_and_rejected_artifacts_do_not_include_raw_dataset_samples(tmp
     assert "CUST-0001" not in validation_text
 
 
-def test_project_does_not_add_llm_or_openai_dependency():
-    """Runtime dependencies should not include OpenAI or other LLM packages yet."""
+def test_project_declares_openai_only_as_optional_llm_dependency():
+    """Runtime dependencies should keep OpenAI out of base installs."""
     pyproject_text = Path("pyproject.toml").read_text(encoding="utf-8").lower()
 
-    assert "openai" not in pyproject_text
-    assert "llm" not in pyproject_text
+    dependencies_section = pyproject_text.split("[project.optional-dependencies]")[0]
+    assert "openai" not in dependencies_section
+    assert "llm" in pyproject_text
+    assert "openai" in pyproject_text
 
 
 def test_cli_input_with_candidates_and_execute_writes_execution_artifact(tmp_path):
@@ -658,3 +661,215 @@ def test_execution_results_do_not_include_raw_dataset_samples(tmp_path):
     assert "duplicate_values" not in execution_text
     assert "unexpected_values" not in execution_text
     assert "failing_values" not in execution_text
+
+
+def _generated_candidates() -> list[dict[str, object]]:
+    """Return deterministic fake LLM candidates for CLI tests."""
+    return [
+        {
+            "test_id": "customer_id_not_null_generated",
+            "test_type": "not_null",
+            "column": "customer_id",
+            "severity": "high",
+            "parameters": {},
+            "rationale": "customer_id is important according to safe evidence.",
+            "suggested_by": "llm_candidate",
+        },
+        {
+            "test_id": "unknown_generated",
+            "test_type": "not_null",
+            "column": "not_a_column",
+            "severity": "medium",
+            "parameters": {},
+            "rationale": "This candidate should be rejected deterministically.",
+            "suggested_by": "llm_candidate",
+        },
+    ]
+
+
+def test_cli_generate_candidates_without_input_fails_cleanly(tmp_path, capsys):
+    """LLM generation requires a loaded dataset and safe payload."""
+    exit_code = main(["--generate-candidates", "--output-dir", str(tmp_path / "outputs")])
+
+    assert exit_code != 0
+    captured = capsys.readouterr()
+    assert "--generate-candidates requires --input" in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_cli_generate_candidates_and_candidates_together_fail_cleanly(tmp_path, capsys):
+    """Manual and LLM candidate sources should be mutually exclusive."""
+    exit_code = main(
+        [
+            "--input",
+            str(SAMPLE_DATASET),
+            "--candidates",
+            str(VALID_CANDIDATES),
+            "--generate-candidates",
+            "--output-dir",
+            str(tmp_path / "outputs"),
+        ]
+    )
+
+    assert exit_code != 0
+    captured = capsys.readouterr()
+    assert "use either --candidates" in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_cli_generate_candidates_without_model_fails_cleanly(tmp_path, capsys, monkeypatch):
+    """LLM generation should require explicit model configuration."""
+    monkeypatch.delenv("DATA_TEST_AGENT_LLM_MODEL", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    exit_code = main(
+        ["--input", str(SAMPLE_DATASET), "--generate-candidates", "--output-dir", str(tmp_path / "outputs")]
+    )
+
+    assert exit_code != 0
+    captured = capsys.readouterr()
+    assert "--llm-model or DATA_TEST_AGENT_LLM_MODEL" in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_cli_generate_candidates_without_api_key_fails_cleanly(tmp_path, capsys, monkeypatch):
+    """LLM generation should require OPENAI_API_KEY without exposing it."""
+    monkeypatch.setenv("DATA_TEST_AGENT_LLM_MODEL", "test-model")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    exit_code = main(
+        ["--input", str(SAMPLE_DATASET), "--generate-candidates", "--output-dir", str(tmp_path / "outputs")]
+    )
+
+    assert exit_code != 0
+    captured = capsys.readouterr()
+    assert "OPENAI_API_KEY" in captured.err
+    assert "Traceback" not in captured.err
+    assert not (tmp_path / "outputs" / LLM_CANDIDATE_TESTS_FILE_NAME).exists()
+
+
+def test_cli_generated_candidate_mode_writes_llm_validation_artifacts(tmp_path, monkeypatch):
+    """Generated candidates should be written and then deterministically validated."""
+    output_dir = tmp_path / "outputs"
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(
+        "data_test_suggestion_agent.cli.generate_candidate_tests_with_openai",
+        lambda **kwargs: _generated_candidates(),
+    )
+
+    exit_code = main(
+        [
+            "--input",
+            str(SAMPLE_DATASET),
+            "--context",
+            str(SAMPLE_CONTEXT),
+            "--generate-candidates",
+            "--llm-model",
+            "test-model",
+            "--max-candidates",
+            "8",
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 0
+    for file_name in (
+        TRACE_FILE_NAME,
+        PROFILE_FILE_NAME,
+        PAYLOAD_FILE_NAME,
+        LLM_CANDIDATE_TESTS_FILE_NAME,
+        VALIDATED_SUGGESTIONS_FILE_NAME,
+        REJECTED_SUGGESTIONS_FILE_NAME,
+    ):
+        assert (output_dir / file_name).is_file()
+    assert not (output_dir / TEST_EXECUTION_RESULTS_FILE_NAME).exists()
+
+    trace = json.loads((output_dir / TRACE_FILE_NAME).read_text(encoding="utf-8"))
+    assert trace["run_status"] == "llm_candidate_generation_completed"
+    assert trace["stages"]["llm_suggestions"] == "completed"
+    assert trace["stages"]["candidate_loading"] == "not_applicable"
+    assert trace["stages"]["suggestion_validation"] == "completed"
+    assert trace["llm_generation"]["candidate_source"] == "llm_generation"
+    assert trace["llm_generation"]["raw_rows_sent_to_llm"] is False
+    assert trace["llm_generation"]["generated_candidate_count"] == 2
+    assert trace["candidate_validation"]["validated_candidate_count"] == 1
+    assert trace["candidate_validation"]["rejected_candidate_count"] == 1
+
+    llm_artifact = json.loads((output_dir / LLM_CANDIDATE_TESTS_FILE_NAME).read_text(encoding="utf-8"))
+    assert llm_artifact["candidate_tests_generated_by_this_agent"] is True
+    assert llm_artifact["llm_called"] is True
+    assert llm_artifact["raw_rows_included"] is False
+    assert llm_artifact["candidate_count"] == 2
+
+    validated = json.loads((output_dir / VALIDATED_SUGGESTIONS_FILE_NAME).read_text(encoding="utf-8"))
+    rejected = json.loads((output_dir / REJECTED_SUGGESTIONS_FILE_NAME).read_text(encoding="utf-8"))
+    assert validated["candidate_tests_generated_by_this_agent"] is True
+    assert validated["llm_called"] is True
+    assert validated["validated_candidates_are_approved_tests"] is False
+    assert rejected["candidate_tests_generated_by_this_agent"] is True
+    assert rejected["llm_called"] is True
+
+
+def test_cli_generated_candidate_mode_with_execution_writes_results(tmp_path, monkeypatch):
+    """Generated validated candidates can be executed locally and failures exit zero."""
+    output_dir = tmp_path / "outputs"
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("DATA_TEST_AGENT_LLM_MODEL", "test-model")
+    monkeypatch.setattr(
+        "data_test_suggestion_agent.cli.generate_candidate_tests_with_openai",
+        lambda **kwargs: _generated_candidates(),
+    )
+
+    exit_code = main(
+        [
+            "--input",
+            str(SAMPLE_DATASET),
+            "--generate-candidates",
+            "--execute-candidates",
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 0
+    execution = json.loads((output_dir / TEST_EXECUTION_RESULTS_FILE_NAME).read_text(encoding="utf-8"))
+    assert execution["candidate_tests_generated_by_this_agent"] is True
+    assert execution["llm_called"] is True
+    assert execution["validated_candidates_are_approved_tests"] is False
+    assert execution["summary"]["validated_candidate_count"] == 1
+    executed_ids = {result["test_id"] for result in execution["execution_results"]}
+    assert executed_ids == {"customer_id_not_null_generated"}
+    assert "unknown_generated" not in executed_ids
+
+
+def test_llm_candidate_artifact_does_not_include_raw_dataset_samples(tmp_path, monkeypatch):
+    """LLM artifact should contain parsed candidates and safe metadata only."""
+    output_dir = tmp_path / "outputs"
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(
+        "data_test_suggestion_agent.cli.generate_candidate_tests_with_openai",
+        lambda **kwargs: _generated_candidates(),
+    )
+
+    assert (
+        main(
+            [
+                "--input",
+                str(SAMPLE_DATASET),
+                "--generate-candidates",
+                "--llm-model",
+                "test-model",
+                "--output-dir",
+                str(output_dir),
+            ]
+        )
+        == 0
+    )
+
+    llm_text = (output_dir / LLM_CANDIDATE_TESTS_FILE_NAME).read_text(encoding="utf-8")
+    assert "alex.rivera@example.com" not in llm_text
+    assert "blair.chen@example.com" not in llm_text
+    assert "CUST-0001" not in llm_text
+    assert "raw_rows_included\": true" not in llm_text
+    assert "example_values_included\": true" not in llm_text

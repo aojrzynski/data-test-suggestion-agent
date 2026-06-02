@@ -47,12 +47,12 @@ def test_payload_builder_without_context_includes_safe_boundaries_and_evidence()
         "payload_version": "0.1.0",
         "agent_name": "data-test-suggestion-agent",
         "package_version": __version__,
-        "purpose": "Local reviewable evidence for future candidate data test suggestion.",
+        "purpose": "Local reviewable safe evidence for candidate data test suggestion.",
         "contains_raw_rows": False,
         "contains_example_values": False,
         "contains_top_values": False,
         "contains_distinct_value_lists": False,
-        "llm_ready": False,
+        "llm_ready": True,
     }
     assert payload["authority_boundary"]["llm_called"] is False
     assert payload["authority_boundary"]["candidate_tests_generated"] is False

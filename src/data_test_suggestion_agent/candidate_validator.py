@@ -1,7 +1,7 @@
 """Deterministic validation for local candidate test suggestions.
 
-This module exists before any LLM generation so future candidates must pass a
-strict local contract before review, execution, or reporting can ever happen.
+This module is the authoritative deterministic gate that all manual or LLM
+candidates must pass before review, execution, or reporting can ever happen.
 It validates schema, supported test types, safe parameter shapes, dataset column
 references, aggregate profile compatibility, and optional human context.
 """
@@ -168,12 +168,15 @@ def validate_candidate_tests(
 
 def build_validated_suggestions_artifact(
     result: CandidateValidationResult,
+    *,
+    candidate_tests_generated_by_this_agent: bool = False,
+    llm_called: bool = False,
 ) -> dict[str, Any]:
     """Build the JSON artifact for validated but unapproved suggestions."""
     return {
         "artifact_name": "validated_test_suggestions",
-        "candidate_tests_generated_by_this_agent": False,
-        "llm_called": False,
+        "candidate_tests_generated_by_this_agent": candidate_tests_generated_by_this_agent,
+        "llm_called": llm_called,
         "validated_candidates_are_approved_tests": False,
         "tests_executed": False,
         "validation_status": "completed",
@@ -184,12 +187,15 @@ def build_validated_suggestions_artifact(
 
 def build_rejected_suggestions_artifact(
     result: CandidateValidationResult,
+    *,
+    candidate_tests_generated_by_this_agent: bool = False,
+    llm_called: bool = False,
 ) -> dict[str, Any]:
     """Build the JSON artifact for rejected candidate suggestions."""
     return {
         "artifact_name": "rejected_test_suggestions",
-        "candidate_tests_generated_by_this_agent": False,
-        "llm_called": False,
+        "candidate_tests_generated_by_this_agent": candidate_tests_generated_by_this_agent,
+        "llm_called": llm_called,
         "validated_candidates_are_approved_tests": False,
         "tests_executed": False,
         "validation_status": "completed",

@@ -93,6 +93,8 @@ def build_test_execution_results_artifact(
     *,
     validated_candidate_count: int,
     execution_results: list[TestExecutionResult],
+    candidate_tests_generated_by_this_agent: bool = False,
+    llm_called: bool = False,
 ) -> dict[str, Any]:
     """Build the aggregate-only test execution JSON artifact.
 
@@ -112,8 +114,8 @@ def build_test_execution_results_artifact(
     return {
         "artifact_name": "test_execution_results",
         "execution_status": "completed",
-        "candidate_tests_generated_by_this_agent": False,
-        "llm_called": False,
+        "candidate_tests_generated_by_this_agent": candidate_tests_generated_by_this_agent,
+        "llm_called": llm_called,
         "validated_candidates_are_approved_tests": False,
         "tests_executed": True,
         "execution_is_local_only": True,

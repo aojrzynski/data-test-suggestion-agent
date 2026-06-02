@@ -1,9 +1,9 @@
-"""Build local-only evidence payloads for future test suggestion workflows.
+"""Build local safe evidence payloads for test suggestion workflows.
 
 This module deliberately stops at deterministic, reviewable evidence assembly.
 It does not call an LLM, infer official tests, generate candidate tests, or
-execute code. Keeping payload construction separate makes the future boundary
-between local evidence and optional bounded generation explicit and testable.
+execute code. Keeping payload construction separate makes the boundary between
+local evidence and optional bounded generation explicit and testable.
 """
 
 from __future__ import annotations
@@ -42,13 +42,12 @@ def build_test_suggestion_payload(
     context: DatasetContext | None = None,
     context_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Return a deterministic safe evidence payload for local review.
+    """Return a deterministic safe evidence payload for review or LLM input.
 
-    The payload is intentionally marked as not LLM-ready in this PR because no
-    prompt contract, bounded generation, execution, or reviewer approval flow
-    exists yet. It gathers only aggregate profile evidence plus optional
-    human-authored context summary, and it records that no candidate tests were
-    generated.
+    The payload gathers only aggregate profile evidence plus optional
+    human-authored context summary. It records that payload construction itself
+    does not call an LLM or generate candidates; the optional generation path
+    can use this safe payload as its bounded input.
     """
     return {
         "payload_metadata": _payload_metadata(),
@@ -58,8 +57,8 @@ def build_test_suggestion_payload(
             context=context,
             context_metadata=context_metadata,
         ),
-        "future_generation_guidance": {
-            "allowed_future_output": "candidate_test_suggestions_only",
+        "generation_guidance": {
+            "allowed_output": "candidate_test_suggestions_only",
             "disallowed_future_output": [
                 "approved_tests",
                 "compliance_verdicts",
@@ -153,12 +152,12 @@ def _payload_metadata() -> dict[str, Any]:
         "payload_version": PAYLOAD_VERSION,
         "agent_name": AGENT_NAME,
         "package_version": __version__,
-        "purpose": "Local reviewable evidence for future candidate data test suggestion.",
+        "purpose": "Local reviewable safe evidence for candidate data test suggestion.",
         "contains_raw_rows": False,
         "contains_example_values": False,
         "contains_top_values": False,
         "contains_distinct_value_lists": False,
-        "llm_ready": False,
+        "llm_ready": True,
     }
 
 
@@ -170,10 +169,10 @@ def _authority_boundary() -> dict[str, Any]:
         "human_review_required": True,
         "test_decisions_are_not_made": True,
         "notes": [
-            "This payload is constructed locally and is not sent anywhere by this CLI.",
+            "This payload is constructed locally and is sent only when --generate-candidates is requested.",
             "It contains aggregate dataset profile evidence and optional human-authored context only.",
             "It must not be treated as approved, complete, or correct test coverage.",
-            "Candidate test generation, execution, and reporting are not implemented in this PR; manually supplied candidates may be validated separately.",
+            "Candidate generation is optional; any generated or manual candidates must pass deterministic validation separately.",
         ],
     }
 
