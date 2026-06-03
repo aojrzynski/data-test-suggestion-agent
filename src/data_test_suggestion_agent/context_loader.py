@@ -16,6 +16,8 @@ import yaml
 
 from data_test_suggestion_agent.models import DatasetContext
 
+# The context schema is intentionally explicit so YAML typos fail cleanly
+# instead of silently changing reviewer intent downstream.
 ALLOWED_CONTEXT_KEYS = {
     "dataset_name",
     "dataset_purpose",
@@ -30,6 +32,8 @@ ALLOWED_CONTEXT_KEYS = {
     "field_notes",
 }
 
+# These groups drive simple schema validation: list-valued fields are normalized
+# to lists of strings, while scalar metadata remains optional string fields.
 LIST_FIELDS = {
     "important_fields",
     "known_id_fields",

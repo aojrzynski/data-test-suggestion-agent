@@ -1,4 +1,10 @@
-"""Load manually supplied local candidate test suggestion JSON files."""
+"""Load manually supplied local candidate test suggestion JSON files.
+
+The loader checks only the outer file shape: local JSON with a top-level
+``candidate_tests`` array of objects. Detailed candidate contract rules,
+dataset compatibility, and safety checks intentionally stay in
+``candidate_validator.py`` so every candidate source shares one gate.
+"""
 
 from __future__ import annotations
 
@@ -61,6 +67,9 @@ def parse_candidate_tests_json_text(
                 f"Candidate entry at index {index} must be an object."
             )
         candidate_copy = dict(candidate)
+        # LLM structured output sometimes omits empty objects. Normalizing only
+        # a missing ``parameters`` field is safe, but invalid test types,
+        # columns, or parameter contents are never repaired here.
         if normalize_missing_parameters and "parameters" not in candidate_copy:
             candidate_copy["parameters"] = {}
         normalized.append(candidate_copy)

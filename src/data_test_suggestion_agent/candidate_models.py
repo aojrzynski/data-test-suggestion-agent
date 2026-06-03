@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+# These are suggestion types accepted by validation. They are not execution
+# permissions by themselves; execution is a later opt-in stage.
 ALLOWED_TEST_TYPES = {
     "not_null",
     "unique",
@@ -20,6 +22,8 @@ ALLOWED_TEST_TYPES = {
     "regex_match",
 }
 ALLOWED_SEVERITIES = {"low", "medium", "high"}
+# Provenance is recorded because manual and LLM candidates share one validator,
+# and reviewers need to distinguish where each suggestion originated.
 ALLOWED_SUGGESTED_BY = {"manual_fixture", "llm_candidate", "human_reviewer"}
 
 REQUIRED_CANDIDATE_FIELDS = {
@@ -62,8 +66,9 @@ class CandidateTestSuggestion:
     """A candidate test suggestion that has passed schema-level coercion.
 
     Passing this model does not mean the candidate is approved, correct, or
-    executable. It only means the local deterministic validation layer accepted
-    the suggestion contract for later human review.
+    executable. The candidate model is distinct from an approved test and from
+    an executed test; it only means the local deterministic validation layer
+    accepted the suggestion contract for later human review.
     """
 
     test_id: str

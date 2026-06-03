@@ -34,6 +34,8 @@ def build_review_report(
     artifacts. It does not approve tests, infer official coverage, call an LLM,
     or expose raw source rows/failing values.
     """
+    # Assemble the report from artifacts already produced in this run. Report
+    # generation does not reread raw data, call the LLM, or recalculate checks.
     sections = [
         "# Data Test Suggestion Review Report",
         _review_boundary_section(),
@@ -107,6 +109,8 @@ def _run_summary_section(
 
 def _dataset_profile_section(profile: DatasetProfile) -> str:
     """Return readable aggregate-only profile evidence with no source examples."""
+    # Use a compact overview plus type-specific detail sections so wide profile
+    # evidence stays readable in Markdown.
     sections = [
         "## Dataset profile summary",
         f"- Row count: {profile.row_count}",
@@ -235,6 +239,8 @@ def _candidate_source_section(
     """Return candidate provenance without prompts or LLM raw responses."""
     lines = ["## Candidate source summary"]
     if llm_metadata is not None:
+        # Provenance is enough for review here; prompts, raw responses,
+        # chain-of-thought, and API keys are intentionally excluded.
         lines.extend(
             [
                 "- Candidate source: LLM-generated candidates used.",
@@ -304,6 +310,8 @@ def _validation_section(
             ),
         ]
     )
+    # Rejection reason codes are sufficient for review and avoid dumping full
+    # candidate payloads into the Markdown report.
     rejected_candidates: Iterable[dict[str, Any]] = []
     if rejected_suggestions_artifact is not None:
         rejected_candidates = rejected_suggestions_artifact.get("rejected_candidates", [])
@@ -339,6 +347,8 @@ def _execution_section(execution_artifact: dict[str, Any] | None) -> str:
         return "\n".join(lines)
 
     summary = execution_artifact.get("summary", {})
+    # Execution metrics are aggregate-only; reports should never include raw
+    # failing rows or unexpected values.
     lines.extend(
         [
             f"- Executed count: {_cell(summary.get('executed_count'))}",

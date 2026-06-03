@@ -1,4 +1,10 @@
-"""Safe deterministic dataset profiling."""
+"""Safe deterministic dataset profiling.
+
+Profiling creates aggregate evidence only: counts, ratios, broad type hints,
+and bounded summaries. It intentionally avoids raw rows, sample/example values,
+top values, and distinct value lists so later suggestion stages cannot copy
+source records into prompts, artifacts, or reports.
+"""
 
 from __future__ import annotations
 
@@ -10,9 +16,15 @@ from pandas.api.types import is_bool_dtype, is_datetime64_any_dtype, is_numeric_
 
 from data_test_suggestion_agent.models import ColumnProfile, DatasetMetadata, DatasetProfile
 
+# Object/string columns are considered date-like only when parsing succeeds for
+# a strong majority of non-null values; otherwise they stay text/unknown.
 DATE_PARSE_THRESHOLD = 0.8
+# Low-cardinality flags are review hints for candidate suggestion, not accepted-
+# values decisions. The validator still requires supplied allowed values.
 LOW_CARDINALITY_MAX_UNIQUE = 20
 LOW_CARDINALITY_MAX_RATIO = 0.2
+# Name matching contributes to a cautious identifier hint; uniqueness/null
+# aggregates are still required, and the hint is not a uniqueness rule.
 ID_NAME_PATTERN = re.compile(r"(^id$|_id$|id$|identifier|uuid|key$)", re.IGNORECASE)
 
 
@@ -20,8 +32,8 @@ def profile_dataset(dataframe: pd.DataFrame, metadata: DatasetMetadata) -> Datas
     """Build a safe aggregate profile for an ingested DataFrame.
 
     This function deliberately stops at deterministic evidence. It does not
-    infer official data tests, because uniqueness, accepted values, and similar
-    constraints require domain context plus human review in later PRs.
+    infer official data tests. It creates evidence for later candidate
+    suggestion, validation, and human review.
     """
     row_count = int(len(dataframe))
     columns = [profile_column(str(column), series, row_count) for column, series in dataframe.items()]
@@ -35,6 +47,8 @@ def profile_dataset(dataframe: pd.DataFrame, metadata: DatasetMetadata) -> Datas
 
 def profile_column(name: str, series: pd.Series, row_count: int) -> ColumnProfile:
     """Return safe aggregate profile evidence for one column."""
+    # Null, non-null, unique, and duplicate counts are safe aggregate evidence:
+    # they describe column shape without exposing any observed row values.
     non_null = series.dropna()
     non_null_count = int(non_null.size)
     null_count = int(row_count - non_null_count)
@@ -44,12 +58,16 @@ def profile_column(name: str, series: pd.Series, row_count: int) -> ColumnProfil
     duplicate_value_count = int(max(non_null_count - unique_count, 0))
     date_stats = _date_stats(series, non_null)
 
+    # Identifier detection is intentionally a cautious hint based on name,
+    # near-uniqueness, and low nulls; it does not assert a final unique key.
     likely_identifier = bool(
         row_count > 0
         and unique_ratio >= 0.95
         and null_ratio <= 0.05
         and ID_NAME_PATTERN.search(name)
     )
+    # Low-cardinality is a suggestion/review hint only. Accepted-values tests
+    # still need explicit allowed values from a candidate source or context.
     low_cardinality = bool(
         row_count > 0
         and unique_count > 0
@@ -72,6 +90,8 @@ def profile_column(name: str, series: pd.Series, row_count: int) -> ColumnProfil
         "low_cardinality_candidate": low_cardinality,
     }
 
+    # Type-specific branches add only aggregate summaries. Booleans need no
+    # extra examples; numeric/text/date summaries use counts, bounds, or lengths.
     if is_bool_dtype(series):
         pass
     elif is_numeric_dtype(series):
@@ -134,16 +154,20 @@ def _text_stats(non_null: pd.Series) -> dict[str, int | float | None]:
 def _date_stats(series: pd.Series, non_null: pd.Series) -> dict[str, int | float | str] | None:
     """Return date aggregates when a column is natively or strongly date-like."""
     if non_null.empty:
+        # Native datetime columns are date-like even when all rows are null.
         if is_datetime64_any_dtype(series):
             return {"parseable_date_count": 0, "parseable_date_ratio": 0.0}
         return None
 
     if is_datetime64_any_dtype(series):
+        # Native datetime dtypes are accepted as date-like before parseability
+        # thresholds because pandas has already typed the column as temporal.
         parsed = pd.to_datetime(non_null, errors="coerce")
     elif series.dtype == "object" or pd.api.types.is_string_dtype(series):
-        # Object columns are treated as date-like only when deterministic parsing
-        # succeeds for a high proportion of non-null values. Aggregates are enough
-        # for later reviewable candidate suggestions; raw date examples are not kept.
+        # Object/string columns require high parseability so ordinary text is
+        # not mislabeled as dates because a few values happen to parse.
+        # Aggregates are enough for reviewable suggestions; raw date examples
+        # are not kept.
         parsed = pd.to_datetime(non_null.astype("string"), errors="coerce", format="mixed")
     else:
         return None
