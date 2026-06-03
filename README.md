@@ -1,32 +1,50 @@
 # Data Test Suggestion Agent
 
-A local-first Python CLI agent for reviewable data test suggestion workflows.
+Data Test Suggestion Agent is a local-first Python CLI agent that profiles a dataset, builds safe aggregate evidence, optionally uses an LLM to propose candidate data tests, validates those candidates deterministically, optionally executes validated checks, and writes a human review report.
 
-The project helps answer:
+It helps answer one practical question:
 
 > What data tests should we add for this dataset?
 
-The workflow combines deterministic evidence collection, optional human-authored context, optional bounded LLM candidate generation, deterministic validation, optional deterministic execution, and human review. LLM-generated candidates are suggestions only; they are never approved tests and never authoritative.
+The answer is intentionally reviewable. Candidate tests are suggestions, not approved tests, and the project keeps deterministic validation, local execution, and human judgment separate from optional LLM generation.
 
-## Current status
+## Why this exists
 
-The project supports:
+Data teams often know a dataset needs tests, but the first step can be unclear. A raw profile can show null counts, unique counts, types, numeric ranges, and date parsing signals, but it does not know which columns are business-critical or which assumptions should become checks.
 
-- deterministic CSV/XLSX/XLSM dataset intake
-- safe aggregate profiling in `dataset_profile.json`
-- optional human-authored YAML context loading with `--context`
-- local safe evidence payload construction in `test_suggestion_payload.json`
-- optional manual candidate validation with `--candidates`
-- optional OpenAI-backed candidate generation with `--generate-candidates`
-- deterministic validation of all manual or generated candidates
-- optional deterministic local execution of validated candidates with `--execute-candidates`
-- optional deterministic Markdown review reporting with `--write-report`
+LLMs can help brainstorm useful test ideas, especially when they receive both aggregate profile evidence and human-authored dataset context. They should not be trusted as authorities, though. This project demonstrates a safer pattern:
 
-The LLM role is the heavier but bounded role: it can propose structured candidate test JSON from `test_suggestion_payload.json`-style safe evidence only. It does not see raw dataset rows, source files, sampled records, top values, distinct value lists, execution rows, API keys, or local source previews. Generated candidates are immediately passed through deterministic validation and may be rejected. Execution remains optional, deterministic, local-only, aggregate-only, and limited to validated candidates. Report generation is also deterministic and local; it does not call an LLM, approve tests, claim final coverage, or include raw rows or raw failing rows.
+- the LLM proposes candidate tests from safe evidence only;
+- deterministic code validates candidate shape, supported types, columns, parameters, and context boundaries;
+- deterministic code optionally executes only validated checks locally;
+- a human reviewer decides what, if anything, becomes official test coverage.
+
+## How it works
+
+```text
+dataset + optional context
+→ safe profile
+→ safe evidence payload
+→ optional LLM candidate generation
+→ deterministic validation
+→ optional deterministic execution
+→ human review report
+```
+
+At a high level, the agent:
+
+1. Deterministically loads a local CSV, XLSX, or XLSM dataset.
+2. Builds an aggregate-only profile with no raw rows, samples, top values, or distinct value lists.
+3. Optionally loads human-authored YAML context that explains dataset meaning.
+4. Builds a safe evidence payload suitable for review or optional LLM input.
+5. Optionally asks an OpenAI model to return structured candidate tests from that safe payload only.
+6. Deterministically validates manual or LLM-generated candidate tests.
+7. Optionally executes only validated candidates with fixed local logic.
+8. Writes deterministic JSON artifacts and, when requested, a Markdown report for human review.
 
 ## Install
 
-Base deterministic usage, tests, and CI use no OpenAI dependency:
+Base deterministic usage, tests, and CI do not require the OpenAI dependency:
 
 ```bash
 python -m venv .venv
@@ -34,72 +52,22 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
-Optional LLM generation requires the `llm` extra:
+On PowerShell, activate the virtual environment with:
 
-```bash
-pip install -e ".[dev,llm]"
+```powershell
+.\.venv\Scripts\Activate.ps1
+pip install -e ".[dev]"
 ```
 
-Run tests:
+Run the test suite:
 
 ```bash
 pytest
 ```
 
-## CLI examples
+## Quick deterministic demo
 
-Show help and version:
-
-```bash
-data-test-suggestion-agent --help
-data-test-suggestion-agent --version
-```
-
-Run no-input scaffold mode:
-
-```bash
-data-test-suggestion-agent --output-dir outputs
-```
-
-Profile the sample dataset and build safe evidence:
-
-```bash
-data-test-suggestion-agent \
-  --input sample_data/customers/customers_for_test_suggestions.csv \
-  --output-dir outputs
-```
-
-Include human-authored context:
-
-```bash
-data-test-suggestion-agent \
-  --input sample_data/customers/customers_for_test_suggestions.csv \
-  --context config/examples/customer_dataset_context.yaml \
-  --output-dir outputs
-```
-
-Validate manually supplied local candidates:
-
-```bash
-data-test-suggestion-agent \
-  --input sample_data/customers/customers_for_test_suggestions.csv \
-  --context config/examples/customer_dataset_context.yaml \
-  --candidates config/examples/customer_candidate_tests.json \
-  --output-dir outputs
-```
-
-Execute only manually supplied candidates that passed deterministic validation:
-
-```bash
-data-test-suggestion-agent \
-  --input sample_data/customers/customers_for_test_suggestions.csv \
-  --context config/examples/customer_dataset_context.yaml \
-  --candidates config/examples/customer_candidate_tests.json \
-  --execute-candidates \
-  --output-dir outputs
-```
-
-Write a deterministic human review report for manual candidates and aggregate execution results:
+This recommended demo uses the sample customer dataset, sample human-authored context, a mixed candidate fixture with both accepted and rejected candidates, deterministic local execution, and a deterministic review report:
 
 ```bash
 data-test-suggestion-agent \
@@ -111,135 +79,99 @@ data-test-suggestion-agent \
   --output-dir outputs
 ```
 
-Generate bounded LLM candidate suggestions from safe evidence only:
+Generated artifacts:
+
+```text
+outputs/data_test_trace.json
+outputs/dataset_profile.json
+outputs/test_suggestion_payload.json
+outputs/validated_test_suggestions.json
+outputs/rejected_test_suggestions.json
+outputs/test_execution_results.json
+outputs/test_suggestion_report.md
+```
+
+Open `outputs/test_suggestion_report.md` first if you want the most readable review artifact. Then inspect the JSON files for the deterministic evidence, validation results, rejected candidates, and aggregate execution outcomes behind the report.
+
+## Optional LLM demo
+
+LLM candidate generation is optional. It requires the OpenAI extra dependency, an API key, and a model name supplied through either `DATA_TEST_AGENT_LLM_MODEL` or `--llm-model`.
+
+Install with the LLM extra:
+
+```bash
+pip install -e ".[dev,llm]"
+```
+
+Set configuration:
 
 ```bash
 export OPENAI_API_KEY="..."
 export DATA_TEST_AGENT_LLM_MODEL="your-model-name"
+```
 
+PowerShell equivalent:
+
+```powershell
+$env:OPENAI_API_KEY = "..."
+$env:DATA_TEST_AGENT_LLM_MODEL = "your-model-name"
+```
+
+Run optional generation, deterministic validation, deterministic execution, and report writing:
+
+```bash
 data-test-suggestion-agent \
   --input sample_data/customers/customers_for_test_suggestions.csv \
   --context config/examples/customer_dataset_context.yaml \
   --generate-candidates \
   --max-candidates 8 \
-  --output-dir outputs
-```
-
-Generate candidates and then execute only those that passed deterministic validation:
-
-```bash
-data-test-suggestion-agent \
-  --input sample_data/customers/customers_for_test_suggestions.csv \
-  --context config/examples/customer_dataset_context.yaml \
-  --generate-candidates \
-  --max-candidates 8 \
-  --execute-candidates \
-  --output-dir outputs
-```
-
-Generate candidates, execute validated candidates, and write a deterministic human review report:
-
-```bash
-export OPENAI_API_KEY="..."
-export DATA_TEST_AGENT_LLM_MODEL="your-model-name"
-
-data-test-suggestion-agent \
-  --input sample_data/customers/customers_for_test_suggestions.csv \
-  --context config/examples/customer_dataset_context.yaml \
-  --generate-candidates \
   --execute-candidates \
   --write-report \
   --output-dir outputs
 ```
 
-Profile an Excel workbook and select a sheet explicitly:
+You can also pass the model explicitly:
 
 ```bash
 data-test-suggestion-agent \
-  --input path/to/workbook.xlsx \
-  --sheet Customers \
+  --input sample_data/customers/customers_for_test_suggestions.csv \
+  --context config/examples/customer_dataset_context.yaml \
+  --generate-candidates \
+  --llm-model your-model-name \
   --output-dir outputs
 ```
 
-## LLM configuration
+`--generate-candidates` and `--candidates` are mutually exclusive. Use manual candidate input for deterministic demos and optional LLM generation when you want to exercise the bounded generation path.
 
-`--generate-candidates` is optional. When used, the model is resolved from:
+## Key design boundaries
 
-1. `--llm-model MODEL_NAME`
-2. `DATA_TEST_AGENT_LLM_MODEL`
+- No raw rows are sent to the LLM.
+- No sampled records, source previews, top values, distinct value lists, raw failing rows, or raw failing values are written to artifacts or reports.
+- No arbitrary candidate-provided code is executed.
+- Candidate validation and execution are deterministic safety gates, not approval.
+- The agent does not auto-approve tests or create an official test suite.
+- The report is human review material, not a coverage certificate.
+- No legal, compliance, or privacy verdicts are made.
+- A human reviewer decides what becomes official.
 
-`OPENAI_API_KEY` must be present in the environment. The CLI does not print or write the API key. If the model, API key, or optional OpenAI SDK dependency is missing, the CLI fails cleanly without a long traceback and without writing LLM/validation/execution artifacts.
+## Artifact overview
 
-`--generate-candidates` and `--candidates` are mutually exclusive: use either manual candidate input or LLM candidate generation, not both.
+| Artifact | Written when | Purpose |
+| --- | --- | --- |
+| `data_test_trace.json` | every run | Run status, stage status, and artifact path summary. |
+| `dataset_profile.json` | input-mode runs | Safe aggregate dataset profile. |
+| `test_suggestion_payload.json` | input-mode runs | Aggregate evidence plus optional context and authority boundaries. |
+| `llm_candidate_tests.json` | successful `--generate-candidates` runs | Parsed structured LLM candidate suggestions and safe generation metadata. |
+| `validated_test_suggestions.json` | manual or LLM candidate runs | Candidate tests that passed deterministic validation, still unapproved. |
+| `rejected_test_suggestions.json` | manual or LLM candidate runs | Candidate tests rejected by deterministic validation, with reason codes. |
+| `test_execution_results.json` | candidate runs with `--execute-candidates` | Aggregate local execution outcomes for validated candidates only. |
+| `test_suggestion_report.md` | input-mode runs with `--write-report` | Deterministic Markdown report for human review. |
 
-## Expected output artifacts
-
-A no-input scaffold run creates only:
-
-```text
-outputs/data_test_trace.json
-```
-
-A profiling run without candidates creates:
-
-```text
-outputs/data_test_trace.json
-outputs/dataset_profile.json
-outputs/test_suggestion_payload.json
-```
-
-A manual candidate validation run creates:
-
-```text
-outputs/data_test_trace.json
-outputs/dataset_profile.json
-outputs/test_suggestion_payload.json
-outputs/validated_test_suggestions.json
-outputs/rejected_test_suggestions.json
-```
-
-An LLM candidate generation run creates:
-
-```text
-outputs/data_test_trace.json
-outputs/dataset_profile.json
-outputs/test_suggestion_payload.json
-outputs/llm_candidate_tests.json
-outputs/validated_test_suggestions.json
-outputs/rejected_test_suggestions.json
-```
-
-Any validation run with `--execute-candidates` also creates:
-
-```text
-outputs/test_execution_results.json
-```
-
-Any input-mode run with `--write-report` also creates:
-
-```text
-outputs/test_suggestion_report.md
-```
-
-## Artifact meanings
-
-`dataset_profile.json` contains deterministic aggregate evidence such as row count, column count, column names, dtypes, null counts, unique counts, numeric bounds/means, text length statistics, and date parse statistics. It intentionally avoids raw rows, example values, top values, distinct value lists, sampled records, and source previews.
-
-`test_suggestion_payload.json` combines aggregate profile evidence, optional human-authored context summary, and explicit safety/authority boundaries. This is the only dataset-derived evidence sent to the LLM when `--generate-candidates` is used. It records that raw rows, example values, top values, and distinct value lists are not included.
-
-`llm_candidate_tests.json` is written only after successful LLM generation and parsing. It records safe metadata such as model, max candidates, source payload artifact, `llm_called: true`, `candidate_tests_generated_by_this_agent: true`, and parsed `candidate_tests`. It does not write raw OpenAI responses, prompts, chain-of-thought, raw rows, examples, top values, or distinct value lists.
-
-`validated_test_suggestions.json` contains candidates that passed deterministic validation. These candidates are **not** approved tests and are **not** complete or automatically correct coverage. Manual mode records `candidate_tests_generated_by_this_agent: false` and `llm_called: false`; LLM mode records both as `true`.
-
-`rejected_test_suggestions.json` contains candidates rejected by deterministic validation, with reason codes and messages. Generated candidates may be rejected for unsupported types, unknown columns, unsafe fields, parameter-shape problems, profile/context incompatibility, or other deterministic rules.
-
-`test_execution_results.json` is written only with `--execute-candidates`. It executes validated candidates with fixed local pandas/Python logic for supported test types. Rejected candidates are not executed. Failed checks are data-quality outcomes and do not make the CLI exit non-zero. Execution results are not approved tests and contain aggregate counts only.
-
-`test_suggestion_report.md` is written only with `--write-report` in input mode. It is a deterministic local Markdown report for human review, generated from in-memory artifacts already produced during the run. Report generation does not call an LLM or use Markdown rendering dependencies. The report does not approve tests, create official coverage, make legal/compliance/privacy verdicts, include raw rows, include sampled records, include raw failing rows, or include raw failing values.
+See [`docs/artifacts.md`](docs/artifacts.md) for a fuller explanation of what each artifact contains and intentionally omits.
 
 ## Candidate validation contract
 
-Allowed candidate test types are:
+Allowed candidate test types:
 
 - `not_null`
 - `unique`
@@ -259,35 +191,43 @@ Allowed severities are `low`, `medium`, and `high`. Candidate objects use this s
   "severity": "high",
   "parameters": {},
   "rationale": "Reason based on safe evidence or human context.",
-  "suggested_by": "manual_fixture or llm_candidate"
+  "suggested_by": "manual_fixture"
 }
 ```
 
-For LLM generation, the prompt and structured output schema require `suggested_by: "llm_candidate"`, supported test types only, and a top-level `{ "candidate_tests": [...] }` object. The deterministic validator remains authoritative for schema validation, supported test types, dataset column checks, profile compatibility checks, context checks, and safe parameter rules.
+Validation checks the candidate contract, supported test types, suspicious executable fields, row-leakage fields, dataset column references, profile compatibility, context boundaries such as fields to ignore, and safe parameter shapes. Passing validation means the candidate is acceptable for review and optional local execution; it does not mean the candidate is approved, correct, complete, or ready for production.
 
-## Optional YAML context
+## What this demonstrates
 
-A context file lets a human reviewer describe dataset meaning that deterministic profiling cannot infer reliably, such as expected grain, important fields, known ID/date/categorical fields, business caveats, fields to ignore, and preferred strictness. Context can add validation notes or reject candidates for fields marked to ignore, but context is not required and does not make any candidate approved.
+For portfolio reviewers, this project demonstrates:
 
-If `preferred_strictness` is omitted, the loader defaults it to `cautious`. Allowed values are `cautious`, `standard`, and `strict`. Fields referenced by context are checked against loaded dataset columns. Missing references are recorded as warnings in `data_test_trace.json` and `test_suggestion_payload.json` rather than failing the run.
+- Python CLI design with a small, understandable command surface.
+- Typed models and dataclasses for dataset profiles, context, candidates, validation results, and execution results.
+- pandas-based dataset intake and aggregate profiling.
+- Safe JSON artifact design for reviewable agent workflows.
+- YAML context loading for human-authored business meaning.
+- Optional OpenAI integration behind an `llm` extra dependency.
+- Structured LLM output constrained to candidate test suggestions.
+- Deterministic validation and deterministic local execution as safety gates.
+- Markdown report generation without making approval or coverage claims.
+- pytest coverage and GitHub Actions-friendly commands.
+- Agent product thinking: bounded autonomy, safe evidence, deterministic controls, and explicit human authority.
 
-## Clean user errors
+## Current limitations
 
-Expected clean failures include:
+- Input support is limited to local CSV, XLSX, and XLSM files.
+- Candidate execution supports a small set of test types.
+- There are no database connections.
+- There is no dbt or Great Expectations export yet.
+- The agent does not generate an approved test suite or `suggested_tests.yaml`.
+- The agent does not implement an approval workflow.
+- LLM quality depends on the safe evidence payload, supplied context, model behavior, and prompt adherence.
+- Generated candidates must be reviewed before any team treats them as official tests.
 
-- `--context` requires `--input`.
-- `--candidates` requires `--input`.
-- `--generate-candidates` requires `--input`.
-- `--sheet` requires `--input` and is only valid for Excel inputs.
-- `--execute-candidates` requires either `--candidates` or `--generate-candidates` with `--input`.
-- `--write-report` requires `--input`.
-- `--generate-candidates` and `--candidates` cannot be used together.
-- `--generate-candidates` requires a resolved model and `OPENAI_API_KEY`.
-- OpenAI SDK/API errors fail cleanly without long tracebacks.
-- malformed candidate JSON or malformed LLM output fails without validation/execution artifacts.
+## More documentation
 
-## Authority boundary
-
-The LLM may propose candidate tests, but it is not authoritative. It must not see raw rows, source files, or API keys; generate executable code; approve tests; claim coverage is complete; make legal/compliance/privacy verdicts; or bypass deterministic validation or execution rules.
-
-Deterministic code remains authoritative for schema validation, supported test types, dataset column checks, profile compatibility checks, context checks, artifact writing, trace status, and local execution of validated candidates. A human reviewer decides what becomes official.
+- [`docs/architecture.md`](docs/architecture.md): module overview, data flow, deterministic logic, and optional LLM boundary.
+- [`docs/demo_workflow.md`](docs/demo_workflow.md): copy-paste walkthrough for installing, testing, running demos, inspecting artifacts, and cleaning outputs.
+- [`docs/artifacts.md`](docs/artifacts.md): detailed artifact-by-artifact explanations.
+- [`docs/design_boundaries.md`](docs/design_boundaries.md): safety and authority model.
+- [`docs/portfolio_summary.md`](docs/portfolio_summary.md): concise project summary for technical and semi-technical reviewers.
