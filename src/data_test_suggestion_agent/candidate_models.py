@@ -1,8 +1,8 @@
 """Typed models for local candidate test suggestion validation.
 
-Candidate suggestions are intentionally modeled before any LLM generation exists.
-The contract gives future generators a narrow, deterministic shape to satisfy,
-while keeping execution, approval, and report generation out of scope.
+Candidate suggestions use a narrow data-only contract shared by manual files
+and optional LLM generation. Execution, approval, and report generation remain
+separate stages.
 """
 
 from __future__ import annotations
@@ -33,8 +33,8 @@ REQUIRED_CANDIDATE_FIELDS = {
 OPTIONAL_CANDIDATE_FIELDS = {"parameters"}
 ALLOWED_CANDIDATE_FIELDS = REQUIRED_CANDIDATE_FIELDS | OPTIONAL_CANDIDATE_FIELDS
 
-# Arbitrary executable text is not part of the candidate contract. Future LLM
-# output must be data-only suggestions that deterministic code can validate.
+# Arbitrary executable text is not part of the candidate contract. Manual and
+# LLM-generated suggestions must remain data-only inputs for validation.
 SUSPICIOUS_EXECUTION_FIELDS = {
     "code",
     "python",
@@ -128,10 +128,10 @@ class RejectedCandidate:
 
 @dataclass(frozen=True)
 class CandidateValidationResult:
-    """Deterministic validation result for manually supplied candidates.
+    """Deterministic validation result for manual or generated candidates.
 
     Validated candidates remain unapproved suggestions. This result is a safety
-    gate for candidate-generation stages, not an execution or governance
+    gate for candidate suggestion workflows, not an execution or governance
     decision.
     """
 

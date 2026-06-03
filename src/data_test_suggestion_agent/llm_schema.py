@@ -15,7 +15,7 @@ def build_llm_candidate_response_schema() -> dict[str, Any]:
 
     The schema constrains the model to the same outer candidate shape accepted
     by deterministic validation. Type-specific parameter rules intentionally
-    remain with the local validator, which is the authoritative safety gate.
+    remain with the local validator, which is the required safety gate.
     """
     return {
         "type": "object",

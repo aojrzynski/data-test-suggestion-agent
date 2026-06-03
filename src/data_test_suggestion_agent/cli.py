@@ -1,4 +1,4 @@
-"""Command-line interface for local profiling, candidate workflows, execution, and reporting."""
+"""Command-line orchestration for local profiling, suggestions, execution, and reporting."""
 
 from __future__ import annotations
 
@@ -400,7 +400,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             # The LLM receives only the safe evidence payload. Its structured
             # output is not trusted; deterministic validation below remains the
-            # authoritative gate before any optional local execution.
+            # required gate before any optional local execution.
             candidate_entries = generate_candidate_tests_with_openai(
                 test_suggestion_payload=payload,
                 model=resolved_model,

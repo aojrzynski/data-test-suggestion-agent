@@ -1,7 +1,7 @@
 """Deterministic validation for local candidate test suggestions.
 
-This module is the authoritative deterministic gate that all manual or LLM
-candidates must pass before review, execution, or reporting can ever happen.
+This module is the deterministic gate that all manual or LLM candidates must
+pass before they can be written as validated suggestions or executed.
 It validates schema, supported test types, safe parameter shapes, dataset column
 references, aggregate profile compatibility, and optional human context.
 """
@@ -143,7 +143,7 @@ def validate_candidate_tests(
             continue
 
         # Construction happens after all checks so the dataclass represents only
-        # contract-valid data. It is still not an approved or executable test.
+        # contract-valid data. Approval and execution remain separate stages.
         validated.append(
             ValidatedCandidate(
                 candidate=CandidateTestSuggestion(

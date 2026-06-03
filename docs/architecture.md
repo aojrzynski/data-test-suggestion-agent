@@ -1,27 +1,27 @@
 # Architecture
 
-Data Test Suggestion Agent is a local-first CLI workflow. It separates deterministic data handling from optional LLM brainstorming so candidate tests can be reviewed without treating generated text as authoritative.
+Data Test Suggestion Agent is a local-first CLI workflow for turning a local dataset into reviewable data-test suggestions. It separates deterministic data handling from optional LLM candidate generation so generated text is never treated as authority.
 
-## Module overview
+## Module responsibilities
 
-- `src/data_test_suggestion_agent/cli.py` coordinates command-line parsing, user-facing error handling, stage ordering, artifact writing, optional LLM generation, optional execution, and optional report generation.
+- `src/data_test_suggestion_agent/cli.py` coordinates command-line parsing, user-facing errors, stage ordering, artifact writing, optional LLM generation, optional execution, and optional report generation.
 - `src/data_test_suggestion_agent/intake.py` loads local CSV, XLSX, and XLSM files and records dataset metadata.
-- `src/data_test_suggestion_agent/profiling.py` builds safe aggregate profiles using pandas. The profile intentionally avoids raw rows, sample records, top values, and distinct value lists.
+- `src/data_test_suggestion_agent/profiling.py` builds safe aggregate profiles with pandas. It avoids raw rows, sample records, source previews, top values, and distinct value lists.
 - `src/data_test_suggestion_agent/models.py` defines typed dataset metadata and profile models.
-- `src/data_test_suggestion_agent/context_loader.py` loads optional human-authored YAML context and validates references against loaded dataset columns when a dataset is available.
-- `src/data_test_suggestion_agent/evidence_payload.py` builds the safe evidence payload that can be reviewed locally or sent to the optional LLM generation path.
-- `src/data_test_suggestion_agent/candidate_models.py` defines the narrow candidate test contract, allowed test types, allowed severities, and fields that are rejected because they look like executable code or row-level leakage.
+- `src/data_test_suggestion_agent/context_loader.py` loads optional human-authored YAML context and validates column references when a dataset is available.
+- `src/data_test_suggestion_agent/evidence_payload.py` builds the safe evidence payload used for local review and optional LLM candidate generation.
+- `src/data_test_suggestion_agent/candidate_models.py` defines the supported candidate test contract, allowed severities, and fields rejected as executable-code or row-level leakage risks.
 - `src/data_test_suggestion_agent/candidate_loader.py` loads manually supplied local candidate JSON.
 - `src/data_test_suggestion_agent/llm_prompt_builder.py`, `src/data_test_suggestion_agent/llm_schema.py`, and `src/data_test_suggestion_agent/llm_candidate_generator.py` contain the optional OpenAI-backed candidate generation path.
 - `src/data_test_suggestion_agent/candidate_validator.py` deterministically validates manual or generated candidates.
-- `src/data_test_suggestion_agent/test_executor.py` deterministically executes only validated candidates with fixed local logic.
-- `src/data_test_suggestion_agent/report_generator.py` builds the deterministic Markdown human review report.
+- `src/data_test_suggestion_agent/test_executor.py` executes only validated candidates with fixed local logic.
+- `src/data_test_suggestion_agent/report_generator.py` builds the deterministic Markdown report for human review.
 - `src/data_test_suggestion_agent/output_writers.py` writes deterministic JSON and Markdown artifacts.
 
 ## Data flow
 
 ```text
-local dataset
+local CSV/XLSX/XLSM dataset
   + optional human-authored YAML context
   ↓
 intake and aggregate profiling
@@ -47,11 +47,11 @@ optional deterministic human review report
 test_suggestion_report.md
 ```
 
-The no-input path writes only a trace artifact. Input-mode paths produce a profile and safe evidence payload. Candidate paths add validation artifacts. Execution and reporting are opt-in.
+A no-input run writes only a trace artifact. Input-mode runs produce a profile and safe evidence payload. Candidate runs add validation artifacts. Execution and report generation are opt-in.
 
-## Where deterministic logic happens
+## Deterministic stages
 
-Most of the project is deterministic:
+Most stages are deterministic:
 
 - dataset file loading and metadata capture;
 - aggregate profiling;
@@ -63,31 +63,25 @@ Most of the project is deterministic:
 - JSON artifact writing with sorted keys;
 - Markdown report generation.
 
-This means the same input files and command options should produce stable local artifacts, aside from expected file-system paths and any future intentionally variable metadata.
+This makes the artifacts inspectable and repeatable for the same input files and command options, aside from expected environment-specific paths and timestamps.
 
-## Where LLM logic happens
+## Optional LLM boundary
 
-LLM logic is isolated to the optional generation path. When `--generate-candidates` is used, the CLI sends the safe evidence payload, not raw dataset rows, to the OpenAI-backed generator. The generator requests structured candidate test output and writes parsed candidate suggestions to `llm_candidate_tests.json` only after successful generation and parsing.
+LLM logic is isolated to candidate generation. When `--generate-candidates` is used, the CLI sends the safe evidence payload to the OpenAI-backed generator. It does not send raw dataset rows. The generator requests structured candidate test output and writes `llm_candidate_tests.json` only after generation and parsing succeed.
 
-The LLM does not execute checks, approve tests, bypass validation, create official test coverage, or write the human review report.
+The LLM can propose candidates, but it cannot execute checks, approve tests, bypass validation, create official test coverage, write the report, or make legal, compliance, or privacy verdicts.
 
-## Why the LLM is optional
+## Why OpenAI is optional
 
-The core workflow is useful without an LLM: a user can profile a dataset, add human-authored context, validate manually supplied candidates, execute validated checks, and write a review report. Keeping generation optional supports deterministic demos, local development, CI, and environments where an external API call is not desired.
+The core workflow is useful without a model call: a user can profile a dataset, add human-authored context, validate manually supplied candidates, execute validated checks, and write a report. Keeping OpenAI behind the `llm` extra keeps the base install focused on deterministic local behavior and keeps CI simple.
 
-The optional LLM path is for brainstorming candidate tests from safe aggregate evidence. It is not required for validation, execution, or reporting.
+Users who only need deterministic behavior can install `python -m pip install -e ".[dev]"`. Users who want optional LLM generation can install `python -m pip install -e ".[dev,llm]"` and provide `OPENAI_API_KEY` plus a model name.
 
-## Why OpenAI is an optional dependency
+## Why validation follows generation
 
-OpenAI support is behind the `llm` extra dependency so the base install remains focused on deterministic local behavior. Users who only need profiling, validation, execution, and reporting can install `pip install -e ".[dev]"`. Users who want LLM candidate generation can install `pip install -e ".[dev,llm]"` and provide `OPENAI_API_KEY` plus a model name.
+Generation can come from a human-authored JSON file or from the optional LLM path. In both cases, validation is the deterministic gate that decides whether a candidate is well-formed enough for review and optional execution.
 
-This keeps CI and deterministic portfolio demos simple while still showing how an external model can be integrated behind a narrow boundary.
-
-## Why validation sits after generation
-
-Generation can come from a human-authored JSON file or from the optional LLM path. In both cases, validation is the safety gate that decides whether a candidate is well-formed enough for review and optional execution.
-
-Validation checks the allowed candidate shape, supported test type, severity, column reference, parameter shape, profile compatibility, context boundaries, suspicious executable fields, and row-leakage fields. This prevents generated text from becoming runtime behavior or approval by default.
+Validation checks the allowed candidate shape, supported test type, severity, column references, parameter shape, profile compatibility, context boundaries, suspicious executable fields, and row-leakage fields. This prevents generated text from becoming runtime behavior or approval by default.
 
 ## Why execution only runs validated candidates
 
@@ -97,6 +91,6 @@ Rejected candidates are not executed. This keeps execution bounded, repeatable, 
 
 ## Why report generation is deterministic
 
-The report is assembled from in-memory artifacts already produced during the run: profile evidence, context summary, validation results, optional execution results, and artifact paths. It does not call an LLM and does not use a Markdown rendering dependency.
+The report is assembled from artifacts and in-memory results already produced during the run: profile evidence, context summary, validation results, optional execution results, and artifact paths. It does not call an LLM and does not use a Markdown rendering dependency.
 
-The report is designed as human review material. It repeats the authority boundary so readers do not mistake candidate suggestions or execution outcomes for approved tests or complete coverage.
+The report is human review material. It repeats the authority boundary so readers do not mistake candidate suggestions or execution outcomes for approved tests or complete coverage.
