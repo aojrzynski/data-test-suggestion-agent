@@ -106,54 +106,86 @@ def _run_summary_section(
 
 
 def _dataset_profile_section(profile: DatasetProfile) -> str:
-    """Return aggregate-only profile evidence with no source examples."""
-    headers = [
-        "column",
-        "profile type",
-        "pandas dtype",
-        "null count",
-        "null ratio",
-        "unique count",
-        "unique ratio",
-        "likely identifier",
-        "low cardinality",
-        "numeric min",
-        "numeric max",
-        "numeric mean",
-        "date min",
-        "date max",
-        "text length stats",
-    ]
-    rows: list[list[Any]] = []
-    for column in profile.columns:
-        length_stats = _length_stats(column.to_dict())
-        rows.append(
+    """Return readable aggregate-only profile evidence with no source examples."""
+    sections = [
+        "## Dataset profile summary",
+        f"- Row count: {profile.row_count}",
+        f"- Column count: {profile.column_count}",
+        "### Column overview",
+        _markdown_table(
+            ["column", "type", "nulls", "unique", "identifier hint", "low-cardinality hint"],
             [
-                column.name,
-                column.profile_type,
-                column.pandas_dtype,
-                column.null_count,
-                column.null_ratio,
-                column.unique_count,
-                column.unique_ratio,
-                column.likely_identifier_candidate,
-                column.low_cardinality_candidate,
-                column.numeric_min,
-                column.numeric_max,
-                column.numeric_mean,
-                column.min_date,
-                column.max_date,
-                length_stats,
+                [
+                    column.name,
+                    column.profile_type,
+                    _count_ratio(column.null_count, column.null_ratio),
+                    _count_ratio(column.unique_count, column.unique_ratio),
+                    column.likely_identifier_candidate,
+                    column.low_cardinality_candidate,
+                ]
+                for column in profile.columns
+            ],
+        ),
+    ]
+
+    numeric_rows = [
+        [column.name, column.numeric_min, column.numeric_max, column.numeric_mean]
+        for column in profile.columns
+        if column.profile_type == "numeric"
+    ]
+    if numeric_rows:
+        sections.extend(
+            [
+                "### Numeric column details",
+                _markdown_table(["column", "min", "max", "mean"], numeric_rows),
             ]
         )
-    return "\n".join(
+
+    date_rows = [
         [
-            "## Dataset profile summary",
-            f"- Row count: {profile.row_count}",
-            f"- Column count: {profile.column_count}",
-            _markdown_table(headers, rows),
+            column.name,
+            column.parseable_date_count,
+            column.parseable_date_ratio,
+            column.min_date,
+            column.max_date,
         ]
-    )
+        for column in profile.columns
+        if column.profile_type == "datetime"
+    ]
+    if date_rows:
+        sections.extend(
+            [
+                "### Date-like column details",
+                _markdown_table(
+                    ["column", "parseable dates", "parseable ratio", "min date", "max date"],
+                    date_rows,
+                ),
+            ]
+        )
+
+    text_rows = [
+        [
+            column.name,
+            column.min_length,
+            column.max_length,
+            column.average_length,
+            column.empty_string_count,
+        ]
+        for column in profile.columns
+        if column.profile_type == "text"
+    ]
+    if text_rows:
+        sections.extend(
+            [
+                "### Text column details",
+                _markdown_table(
+                    ["column", "min length", "max length", "average length", "empty strings"],
+                    text_rows,
+                ),
+            ]
+        )
+
+    return "\n\n".join(sections)
 
 
 def _context_section(
@@ -257,7 +289,7 @@ def _validation_section(
             "- Deterministic validation is a safety gate, not approval.",
             "### Validated candidates",
             _markdown_table(
-                ["test_id", "test_type", "column", "severity", "suggested_by", "validation notes"],
+                ["test_id", "type", "column", "severity", "source", "notes"],
                 [
                     [
                         candidate.get("test_id"),
@@ -279,7 +311,7 @@ def _validation_section(
         [
             "### Rejected candidates",
             _markdown_table(
-                ["candidate index", "test_id", "test_type", "column", "rejection reason codes"],
+                ["index", "test_id", "type", "column", "reason codes"],
                 [
                     [
                         candidate.get("candidate_index"),
@@ -296,7 +328,7 @@ def _validation_section(
             ),
         ]
     )
-    return "\n".join(lines)
+    return "\n".join(lines).replace("\n###", "\n\n###")
 
 
 def _execution_section(execution_artifact: dict[str, Any] | None) -> str:
@@ -316,25 +348,13 @@ def _execution_section(execution_artifact: dict[str, Any] | None) -> str:
             "- Failed checks are review outcomes, not CLI/process failures.",
             "- Execution results are aggregate check outcomes, not official test coverage.",
             _markdown_table(
-                [
-                    "test_id",
-                    "test_type",
-                    "column",
-                    "severity",
-                    "status",
-                    "evaluated row count",
-                    "failure count",
-                    "failure ratio",
-                    "key aggregate metrics",
-                ],
+                ["test_id", "type", "column", "status", "failures", "failure ratio", "key metrics"],
                 [
                     [
                         result.get("test_id"),
                         result.get("test_type"),
                         result.get("column"),
-                        result.get("severity"),
                         result.get("status"),
-                        result.get("evaluated_row_count"),
                         result.get("failure_count"),
                         result.get("failure_ratio"),
                         _format_metrics(result.get("metrics", {})),
@@ -410,16 +430,9 @@ def _join_list(values: Iterable[Any] | None) -> str:
     return ", ".join(rendered)
 
 
-def _length_stats(column: dict[str, Any]) -> str:
-    """Format text length aggregate metrics when present."""
-    fields = {
-        "min": column.get("min_length"),
-        "max": column.get("max_length"),
-        "avg": column.get("average_length"),
-        "empty": column.get("empty_string_count"),
-    }
-    present = [f"{name}={value}" for name, value in fields.items() if value is not None]
-    return "; ".join(present) if present else "not present"
+def _count_ratio(count: Any, ratio: Any) -> str:
+    """Format an aggregate count and ratio compactly for overview tables."""
+    return f"{_cell(count)} ({_cell(ratio)})"
 
 
 def _format_metrics(metrics: dict[str, Any]) -> str:

@@ -23,6 +23,12 @@ from data_test_suggestion_agent.test_executor import (
 SAMPLE_DATASET = Path("sample_data/customers/customers_for_test_suggestions.csv")
 SAMPLE_CONTEXT = Path("config/examples/customer_dataset_context.yaml")
 MIXED_CANDIDATES = Path("config/examples/customer_candidate_tests_with_rejections.json")
+OLD_WIDE_PROFILE_HEADER = (
+    "| column | profile type | pandas dtype | null count | null ratio | "
+    "unique count | unique ratio | likely identifier | low cardinality | "
+    "numeric min | numeric max | numeric mean | date min | date max | "
+    "text length stats |"
+)
 
 
 def _profile_payload_context():
@@ -85,6 +91,15 @@ def test_builds_profile_only_report_with_boundary_and_dataset_summary():
     assert "Input file name: customers_for_test_suggestions.csv" in report
     assert "Row count: 24" in report
     assert "Column count: 9" in report
+    assert "### Column overview" in report
+    assert "| column | type | nulls | unique | identifier hint | low-cardinality hint |" in report
+    assert "### Numeric column details" in report
+    assert "| column | min | max | mean |" in report
+    assert "### Date-like column details" in report
+    assert "| column | parseable dates | parseable ratio | min date | max date |" in report
+    assert "### Text column details" in report
+    assert "| column | min length | max length | average length | empty strings |" in report
+    assert OLD_WIDE_PROFILE_HEADER not in report
     assert "Candidate validation was not requested." in report
     assert "Candidate execution was not requested." in report
     assert "No candidate generation or validation was requested." in report
@@ -129,6 +144,8 @@ def test_builds_report_with_manual_candidate_validation_artifacts():
     assert "Input candidate count: 8" in report
     assert "Validated count: 2" in report
     assert "Rejected count: 6" in report
+    assert "| test_id | type | column | severity | source | notes |" in report
+    assert "| index | test_id | type | column | reason codes |" in report
     assert "customer_id_not_null" in report
     assert "unknown_column" in report
     assert "Candidate tests are not approved tests." in report
@@ -190,6 +207,7 @@ def test_builds_report_with_execution_results():
     assert "Passed count: 2" in report
     assert "Execution is local-only." in report
     assert "Failed checks are review outcomes, not CLI/process failures." in report
+    assert "| test_id | type | column | status | failures | failure ratio | key metrics |" in report
     assert "null_count=0" in report
 
 
@@ -209,5 +227,7 @@ def test_report_avoids_raw_samples_and_forbidden_authority_claims():
     assert "approve automatically" not in lower_report
     assert "coverage is complete" not in lower_report
     assert "tests are guaranteed correct" not in lower_report
+    assert "candidate tests are approved tests" not in lower_report
+    assert "does not call an llm" in lower_report
     assert "compliant" not in lower_report
     assert "gdpr" not in lower_report
