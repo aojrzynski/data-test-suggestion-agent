@@ -1,112 +1,114 @@
 # Artifacts
 
-This project writes deterministic local artifacts so a reviewer can understand the workflow without treating suggestions as approved tests. The exact artifact set depends on the command options used.
+Data Test Suggestion Agent writes local artifacts so reviewers can inspect what happened at each stage. The exact set depends on command options.
+
+The artifacts are designed for review without storing raw dataset rows, sampled records, source previews, top values, distinct value lists, raw failing rows, or raw failing values.
 
 ## Summary table
 
-| Artifact | Category | May include LLM output? | Written when |
+| Artifact | Category | Written when | May include LLM output? |
 | --- | --- | --- | --- |
-| `data_test_trace.json` | run trace | Metadata can record whether LLM was called | Every run |
-| `dataset_profile.json` | safe aggregate evidence | No | Input-mode runs |
-| `test_suggestion_payload.json` | safe aggregate evidence for review or optional LLM input | No LLM output; may become LLM input | Input-mode runs |
-| `llm_candidate_tests.json` | candidate suggestions | Yes | Successful `--generate-candidates` runs |
-| `validated_test_suggestions.json` | validation results | Yes, if generated candidates passed validation | Manual or LLM candidate runs |
-| `rejected_test_suggestions.json` | validation results | Yes, if generated candidates were rejected | Manual or LLM candidate runs |
-| `test_execution_results.json` | execution results | Indirectly, if validated candidates came from the LLM | Candidate runs with `--execute-candidates` |
-| `test_suggestion_report.md` | human review material | May summarize generated candidates if present | Input-mode runs with `--write-report` |
+| `data_test_trace.json` | Run trace | Every run | No candidate text, but metadata may record LLM stage status |
+| `dataset_profile.json` | Safe aggregate evidence | Input-mode runs | No |
+| `test_suggestion_payload.json` | Safe evidence for review or optional LLM input | Input-mode runs | No LLM output; may become LLM input |
+| `llm_candidate_tests.json` | Candidate suggestions | Successful `--generate-candidates` runs | Yes |
+| `validated_test_suggestions.json` | Validation results | Manual or LLM candidate runs | Yes, if generated candidates passed validation |
+| `rejected_test_suggestions.json` | Validation results | Manual or LLM candidate runs | Yes, if generated candidates were rejected |
+| `test_execution_results.json` | Execution results | Candidate runs with `--execute-candidates` | Indirectly, if validated candidates came from the LLM |
+| `test_suggestion_report.md` | Human review material | Input-mode runs with `--write-report` | May summarize generated candidates if present |
 
 ## `data_test_trace.json`
 
-**When it is written:** every run, including no-input scaffold runs.
+**What it contains:** run status, package metadata, stage statuses, artifact paths, and summary metadata for completed stages. Candidate, LLM, execution, and report metadata appear when those stages run.
 
-**What it contains:** run status, package metadata, stage statuses, artifact paths, and summary metadata for completed stages. Candidate, LLM, execution, and report metadata are included when those stages run.
+**Who it is for:** anyone who wants a compact record of which stages ran and where their artifacts were written.
 
-**What it intentionally does not contain:** raw rows, sampled records, source previews, top values, distinct value lists, raw failing rows, failing values, API keys, prompts, raw LLM responses, or approval decisions.
+**Raw values / raw rows:** none. It does not contain raw rows, samples, previews, top values, distinct values, raw failing rows, or failing values.
 
-**LLM output:** it does not contain candidate test content from the LLM, but it can record whether LLM generation was requested or completed and which artifact path was written.
+**LLM output:** no candidate content or raw model response. It can record whether LLM generation was requested or completed.
 
-**Category:** run trace.
+**How it supports review:** it provides a quick run audit trail and links the stage sequence to concrete artifact paths.
 
 ## `dataset_profile.json`
 
-**When it is written:** input-mode runs after the local dataset is loaded and profiled.
-
 **What it contains:** deterministic aggregate profile evidence, including dataset metadata, row count, column count, column names, inferred profile types, null counts, unique counts, numeric bounds and means, text length statistics, empty string counts, date parse counts, date parse ratios, and min/max dates where applicable.
 
-**What it intentionally does not contain:** raw rows, example rows, sampled records, source previews, raw source snippets, top values, distinct value lists, raw failing rows, or LLM output.
+**Who it is for:** reviewers who want to understand the dataset evidence before looking at candidate tests.
+
+**Raw values / raw rows:** none. It intentionally avoids raw rows, example rows, sampled records, source previews, top values, and distinct value lists.
 
 **LLM output:** no.
 
-**Category:** safe aggregate evidence.
+**How it supports review:** it shows the profile facts behind the evidence payload and validation decisions without exposing row-level data.
 
 ## `test_suggestion_payload.json`
 
-**When it is written:** input-mode runs after profiling and optional context loading.
+**What it contains:** the safe evidence payload built from aggregate profile evidence, optional human-authored context summary, payload metadata, generation guidance, and authority boundaries.
 
-**What it contains:** a safe evidence payload composed of aggregate profile evidence, optional human-authored context summary, payload metadata, generation guidance, and authority boundaries. This is the dataset-derived artifact used by the optional LLM path.
+**Who it is for:** reviewers and, only when explicitly requested, the optional LLM candidate generation path.
 
-**What it intentionally does not contain:** raw rows, sampled records, source previews, example values, top values, distinct value lists, raw failing rows, failing values, generated candidate tests, approval decisions, or legal/compliance/privacy verdicts.
+**Raw values / raw rows:** none. It excludes raw rows, sampled records, source previews, example values, top values, distinct value lists, raw failing rows, and failing values.
 
-**LLM output:** no. It may be sent to the LLM only when `--generate-candidates` is explicitly requested.
+**LLM output:** no. It may be sent to the LLM only when `--generate-candidates` is requested.
 
-**Category:** safe aggregate evidence and optional LLM input.
+**How it supports review:** it makes the LLM input boundary inspectable and gives humans the same safe evidence used for candidate generation.
 
 ## `llm_candidate_tests.json`
 
-**When it is written:** only after successful `--generate-candidates` execution and successful parsing of the model response.
+**What it contains:** parsed structured candidate suggestions returned by the optional LLM path, plus safe generation metadata such as model name, maximum requested candidates, source payload artifact, `llm_called: true`, and `candidate_tests_generated_by_this_agent: true`.
 
-**What it contains:** safe generation metadata such as the model name, maximum requested candidates, source payload artifact, `llm_called: true`, `candidate_tests_generated_by_this_agent: true`, and parsed `candidate_tests` in the supported structured candidate format.
+**Who it is for:** reviewers who want to inspect what the LLM proposed before deterministic validation.
 
-**What it intentionally does not contain:** raw rows, sampled records, source previews, top values, distinct value lists, raw failing rows, failing values, raw OpenAI responses, chain-of-thought, API keys, arbitrary executable code, or approved tests.
+**Raw values / raw rows:** none. It does not include raw rows, sampled records, source previews, top values, distinct value lists, raw failing rows, or failing values.
 
-**LLM output:** yes. It contains parsed structured candidate suggestions from the LLM, not raw model internals.
+**LLM output:** yes. It contains parsed candidate suggestions, not raw OpenAI responses, chain-of-thought, API keys, or prompts.
 
-**Category:** candidate suggestions.
+**How it supports review:** it separates model-suggested candidates from deterministic validation results so reviewers can see what was proposed and what survived the safety gate.
 
 ## `validated_test_suggestions.json`
 
-**When it is written:** manual candidate runs with `--candidates` or successful LLM generation runs with `--generate-candidates`, after deterministic validation completes.
+**What it contains:** candidate tests that passed deterministic validation, validation notes, source metadata, candidate counts, and whether candidates were generated by this agent.
 
-**What it contains:** candidate tests that passed deterministic validation, validation notes, source metadata, candidate counts, and whether candidates were generated by this agent. In manual mode, metadata records that the LLM was not called. In LLM mode, metadata records that generation was used.
+**Who it is for:** reviewers who want to inspect candidates eligible for optional local execution or for possible manual adoption elsewhere.
 
-**What it intentionally does not contain:** approved tests, complete test coverage claims, raw rows, raw failing rows, arbitrary generated code, or legal/compliance/privacy verdicts.
+**Raw values / raw rows:** none. It does not contain raw rows, raw failing rows, arbitrary generated code, approval decisions, or complete coverage claims.
 
-**LLM output:** it may include candidate content that originated from the LLM if `--generate-candidates` was used and the candidate passed validation.
+**LLM output:** possibly. If `--generate-candidates` was used, validated candidate content may have originated from the LLM.
 
-**Category:** validation results. These are still candidate suggestions, not official tests.
+**How it supports review:** it shows which candidates fit the supported contract and profile/context boundaries. These are still candidate suggestions, not official tests.
 
 ## `rejected_test_suggestions.json`
 
-**When it is written:** manual candidate runs with `--candidates` or successful LLM generation runs with `--generate-candidates`, after deterministic validation completes.
+**What it contains:** rejected candidate summaries with candidate index, available candidate identifiers, columns, test types, deterministic reason codes, and human-readable rejection messages.
 
-**What it contains:** rejected candidate summaries with candidate index, available candidate identifiers, columns, test types, and deterministic rejection reason codes and messages.
+**Who it is for:** reviewers who want to understand unsafe, unsupported, incompatible, or context-conflicting suggestions.
 
-**What it intentionally does not contain:** raw rows, raw failing rows, full unsafe payloads, arbitrary executable code to run, approval decisions, or final coverage judgments.
+**Raw values / raw rows:** none. It avoids raw rows, raw failing rows, full unsafe payloads, and arbitrary executable code.
 
-**LLM output:** it may summarize rejected LLM-generated candidates if `--generate-candidates` was used. Rejection reasons are deterministic local validation output.
+**LLM output:** possibly summarized. If rejected candidates came from the LLM, the artifact records the rejected candidate summary and deterministic rejection reason.
 
-**Category:** validation results and review material. Rejected candidates can still help a reviewer understand bad assumptions, unsupported requests, missing context, or ideas that need rewriting.
+**How it supports review:** rejected candidates can reveal missing context, bad assumptions, unsupported test requests, or ideas that need rewriting before they can be considered.
 
 ## `test_execution_results.json`
 
-**When it is written:** candidate runs that include `--execute-candidates`, after validation.
-
 **What it contains:** aggregate execution outcomes for validated candidates only, such as pass/fail status and aggregate failure counts for supported test types. Execution uses fixed local logic rather than candidate-provided code.
 
-**What it intentionally does not contain:** raw failing rows, sampled failing rows, raw failing values, row-level exports, arbitrary generated code, approved test status, or complete coverage claims.
+**Who it is for:** reviewers who want to see what happened when validated checks ran against the local dataset.
+
+**Raw values / raw rows:** none. It does not contain raw failing rows, sampled failing rows, raw failing values, row-level exports, arbitrary generated code, approved test status, or complete coverage claims.
 
 **LLM output:** indirectly possible. If validated candidates came from the LLM, execution results refer to those validated candidate IDs and checks. The execution results themselves are deterministic local outputs.
 
-**Category:** execution results. Failed checks are review outcomes about the data, not process failures.
+**How it supports review:** failed checks are review outcomes about the data, not process failures. A human reviewer decides whether a result means the candidate should be adopted, adjusted, or discarded.
 
 ## `test_suggestion_report.md`
 
-**When it is written:** input-mode runs that include `--write-report`.
+**What it contains:** a deterministic Markdown summary for human review, including run information, aggregate profile summary, optional context summary, validation summary, optional execution summary, rejected candidate summary, and repeated authority boundaries.
 
-**What it contains:** a deterministic Markdown summary for human review, including run information, aggregate profile summary, optional context summary, validation summary, optional execution summary, rejected candidate summary, and repeated review boundaries.
+**Who it is for:** humans who want the most readable summary of the run before inspecting JSON details.
 
-**What it intentionally does not contain:** raw rows, sampled records, source previews, top values, distinct value lists, raw failing rows, failing values, approved tests, complete coverage claims, or legal/compliance/privacy verdicts.
+**Raw values / raw rows:** none. It excludes raw rows, sampled records, source previews, top values, distinct value lists, raw failing rows, and failing values.
 
 **LLM output:** it may summarize LLM-generated candidates if generation was used earlier in the run. The report itself is generated deterministically and does not call an LLM.
 
-**Category:** human review material.
+**How it supports review:** it brings the main evidence, candidate, validation, execution, and authority-boundary information together in a readable document without approving tests or claiming complete coverage.

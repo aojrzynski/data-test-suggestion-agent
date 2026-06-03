@@ -19,7 +19,7 @@ AGENT_NAME = "data-test-suggestion-agent"
 
 # These names are intentionally excluded from profile summaries and checked in
 # tests. They describe row-level leakage patterns that are out of scope for this
-# local evidence payload and any future LLM handoff.
+# local evidence payload and any optional LLM handoff.
 DISALLOWED_ROW_VALUE_KEYS = {
     "raw_rows",
     "records",
@@ -75,7 +75,7 @@ def summarize_profile_for_payload(profile: DatasetProfile) -> dict[str, Any]:
 
     ``DatasetProfile`` already avoids raw rows, examples, top values, and
     distinct value lists. This extra projection documents the boundary for the
-    future generation input and prevents accidental addition of preview-like
+    optional generation input and prevents accidental addition of preview-like
     fields to the payload if the profile artifact evolves.
     """
     profile_dict = profile.to_dict()
