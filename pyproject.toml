@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "data-test-suggestion-agent"
 version = "0.1.0"
-description = "A local-first scaffold for future reviewable data test suggestions."
+description = "A local-first CLI for reviewable data test suggestions."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
@@ -26,6 +26,9 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "pytest>=8",
+]
+llm = [
+  "openai>=1.68",
 ]
 
 [project.scripts]

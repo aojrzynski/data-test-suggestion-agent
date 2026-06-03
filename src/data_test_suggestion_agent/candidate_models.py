@@ -131,7 +131,7 @@ class CandidateValidationResult:
     """Deterministic validation result for manually supplied candidates.
 
     Validated candidates remain unapproved suggestions. This result is a safety
-    gate for future candidate-generation stages, not an execution or governance
+    gate for candidate-generation stages, not an execution or governance
     decision.
     """
 

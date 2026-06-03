@@ -26,21 +26,42 @@ def load_candidate_tests(candidates_path: str) -> list[dict[str, Any]]:
     except OSError as exc:
         raise CandidateLoadError(f"Could not read candidate file: {exc}") from exc
 
+    return parse_candidate_tests_json_text(raw_text, source_label="Candidate JSON")
+
+
+def parse_candidate_tests_json_text(
+    raw_text: str,
+    *,
+    source_label: str = "Candidate JSON",
+    normalize_missing_parameters: bool = False,
+) -> list[dict[str, Any]]:
+    """Parse candidate JSON text and validate the shared outer shape.
+
+    This helper is shared by manual file loading and LLM response parsing so
+    both paths use the same top-level ``candidate_tests`` contract. Detailed
+    candidate semantics remain the deterministic validator's responsibility.
+    """
     try:
         loaded = json.loads(raw_text)
     except json.JSONDecodeError as exc:
         raise CandidateLoadError(f"Malformed candidate JSON: {exc}") from exc
 
     if not isinstance(loaded, dict):
-        raise CandidateLoadError("Candidate JSON top level must be an object.")
+        raise CandidateLoadError(f"{source_label} top level must be an object.")
     if "candidate_tests" not in loaded:
-        raise CandidateLoadError("Candidate JSON must include 'candidate_tests'.")
+        raise CandidateLoadError(f"{source_label} must include 'candidate_tests'.")
     candidate_tests = loaded["candidate_tests"]
     if not isinstance(candidate_tests, list):
-        raise CandidateLoadError("Candidate JSON field 'candidate_tests' must be a list.")
+        raise CandidateLoadError(f"{source_label} field 'candidate_tests' must be a list.")
+
+    normalized: list[dict[str, Any]] = []
     for index, candidate in enumerate(candidate_tests):
         if not isinstance(candidate, dict):
             raise CandidateLoadError(
                 f"Candidate entry at index {index} must be an object."
             )
-    return list(candidate_tests)
+        candidate_copy = dict(candidate)
+        if normalize_missing_parameters and "parameters" not in candidate_copy:
+            candidate_copy["parameters"] = {}
+        normalized.append(candidate_copy)
+    return normalized

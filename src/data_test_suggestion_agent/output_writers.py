@@ -12,6 +12,7 @@ PAYLOAD_FILE_NAME = "test_suggestion_payload.json"
 VALIDATED_SUGGESTIONS_FILE_NAME = "validated_test_suggestions.json"
 REJECTED_SUGGESTIONS_FILE_NAME = "rejected_test_suggestions.json"
 TEST_EXECUTION_RESULTS_FILE_NAME = "test_execution_results.json"
+LLM_CANDIDATE_TESTS_FILE_NAME = "llm_candidate_tests.json"
 
 
 def write_json_artifact(output_dir: Path, file_name: str, payload: dict[str, Any]) -> Path:

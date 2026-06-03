@@ -1,8 +1,9 @@
-"""Command-line interface for local intake, profiling, context loading, candidate validation, and deterministic candidate execution."""
+"""Command-line interface for local profiling, bounded candidate generation, validation, and execution."""
 
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 from typing import Sequence
@@ -24,11 +25,17 @@ from data_test_suggestion_agent.context_loader import (
 )
 from data_test_suggestion_agent.evidence_payload import build_test_suggestion_payload
 from data_test_suggestion_agent.intake import IntakeError, load_dataset
+from data_test_suggestion_agent.llm_candidate_generator import (
+    CandidateGenerationError,
+    build_llm_candidate_tests_artifact,
+    generate_candidate_tests_with_openai,
+)
 from data_test_suggestion_agent.test_executor import (
     build_test_execution_results_artifact,
     execute_validated_candidates,
 )
 from data_test_suggestion_agent.output_writers import (
+    LLM_CANDIDATE_TESTS_FILE_NAME,
     PAYLOAD_FILE_NAME,
     PROFILE_FILE_NAME,
     REJECTED_SUGGESTIONS_FILE_NAME,
@@ -61,8 +68,8 @@ def build_parser() -> argparse.ArgumentParser:
         prog=AGENT_NAME,
         description=(
             "Profile a local CSV/XLSX/XLSM dataset into safe aggregate evidence. "
-            "Optionally validate manual candidate suggestions and execute validated "
-            "candidates locally with aggregate-only results. LLM calls are not implemented."
+            "Optionally validate manual candidates, generate bounded LLM candidates "
+            "from safe evidence only, and execute validated candidates locally."
         ),
     )
     parser.add_argument(
@@ -80,6 +87,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--candidates",
         help="Path to an optional local JSON file of manually supplied candidate tests.",
+    )
+    parser.add_argument(
+        "--generate-candidates",
+        action="store_true",
+        help="Call an optional OpenAI LLM to generate structured candidate tests from safe evidence only.",
+    )
+    parser.add_argument(
+        "--llm-model",
+        help="OpenAI model name for --generate-candidates. Defaults to DATA_TEST_AGENT_LLM_MODEL.",
+    )
+    parser.add_argument(
+        "--max-candidates",
+        type=int,
+        default=8,
+        help="Maximum candidate suggestions to request from the LLM when --generate-candidates is used.",
     )
     parser.add_argument(
         "--execute-candidates",
@@ -115,8 +137,8 @@ def build_scaffold_trace() -> dict[str, object]:
         "run_status": "scaffold_completed",
         "message": (
             "Scaffold run completed. Provide --input to run deterministic dataset "
-            "intake and safe profiling. Candidate generation and LLM calls are "
-            "not implemented; candidate execution is opt-in after validation."
+            "intake and safe profiling. Candidate generation is optional and "
+            "bounded; candidate execution is opt-in after validation."
         ),
         "artifact_paths": {"trace": TRACE_FILE_NAME},
         "stages": stages,
@@ -132,6 +154,7 @@ def build_profile_trace(
     context_metadata: dict[str, object] | None = None,
     candidate_metadata: dict[str, object] | None = None,
     execution_metadata: dict[str, object] | None = None,
+    llm_metadata: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Return a trace payload for a completed intake/profile run."""
     stages = {stage: "not_implemented" for stage in FUTURE_STAGES}
@@ -141,8 +164,11 @@ def build_profile_trace(
         "completed" if context_metadata is not None else "not_requested"
     )
     stages["evidence_payload"] = "completed"
+    stages["llm_suggestions"] = "completed" if llm_metadata is not None else "not_requested"
     stages["candidate_loading"] = (
-        "completed" if candidate_metadata is not None else "not_requested"
+        "not_applicable"
+        if llm_metadata is not None
+        else "completed" if candidate_metadata is not None else "not_requested"
     )
     stages["suggestion_validation"] = (
         "completed" if candidate_metadata is not None else "not_requested"
@@ -151,21 +177,30 @@ def build_profile_trace(
         "completed" if execution_metadata is not None else "not_requested"
     )
 
+    if execution_metadata is not None:
+        run_status = "test_execution_completed"
+        message = "Deterministic execution completed for validated candidates."
+    elif llm_metadata is not None:
+        run_status = "llm_candidate_generation_completed"
+        message = "LLM candidate generation completed, followed by deterministic validation."
+    elif candidate_metadata is not None:
+        run_status = "candidate_validation_completed"
+        message = "Manual candidate validation completed; no LLM generation."
+    else:
+        run_status = "evidence_payload_completed"
+        message = (
+            "Evidence payload construction completed; no test suggestions generated "
+            "unless manual or LLM candidate generation is requested."
+        )
+
     # Context can inform later review workflows, but it is not a test suggestion
     # and is intentionally kept out of dataset_profile.json.
     trace: dict[str, object] = {
         "agent_name": AGENT_NAME,
         "package_name": PACKAGE_NAME,
         "package_version": __version__,
-        "run_status": (
-            "test_execution_completed"
-            if execution_metadata is not None
-            else "evidence_payload_completed"
-        ),
-        "message": (
-            "Dataset intake, safe aggregate profiling, and local evidence payload "
-            "construction completed. No test suggestions were generated."
-        ),
+        "run_status": run_status,
+        "message": message,
         "dataset_metadata": metadata,
         "artifact_paths": {
             "trace": str(trace_path),
@@ -176,6 +211,13 @@ def build_profile_trace(
     }
     if context_metadata is not None:
         trace["context_metadata"] = context_metadata
+    if llm_metadata is not None:
+        trace["llm_generation"] = llm_metadata
+        artifact_paths = trace["artifact_paths"]
+        if isinstance(artifact_paths, dict):
+            artifact_paths["llm_candidate_tests"] = llm_metadata[
+                "llm_candidate_tests_path"
+            ]
     if candidate_metadata is not None:
         trace["candidate_validation"] = candidate_metadata
         artifact_paths = trace["artifact_paths"]
@@ -224,6 +266,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     output_dir = Path(args.output_dir)
 
+    if args.generate_candidates and args.max_candidates < 1:
+        print("Error: --max-candidates must be at least 1.", file=sys.stderr)
+        return 2
+
+    if args.generate_candidates and args.candidates is not None:
+        print(
+            "Error: use either --candidates for manual candidate input or --generate-candidates for LLM generation, not both.",
+            file=sys.stderr,
+        )
+        return 2
+
     if args.input is None:
         if args.sheet is not None:
             print(
@@ -243,9 +296,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 2
+        if args.generate_candidates:
+            print(
+                "Error: --generate-candidates requires --input so only safe evidence from a loaded dataset is sent to the LLM.",
+                file=sys.stderr,
+            )
+            return 2
         if args.execute_candidates:
             print(
-                "Error: --execute-candidates requires --input and --candidates so validated candidates can be executed locally.",
+                "Error: --execute-candidates requires --input and candidate validation so validated candidates can be executed locally.",
                 file=sys.stderr,
             )
             return 2
@@ -253,12 +312,28 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Scaffold run completed. Trace written to {trace_path}.")
         return 0
 
-    if args.execute_candidates and args.candidates is None:
+    if args.execute_candidates and args.candidates is None and not args.generate_candidates:
         print(
-            "Error: --execute-candidates requires --candidates so only validated candidate tests can be executed.",
+            "Error: --execute-candidates requires --candidates or --generate-candidates so only validated candidate tests can be executed.",
             file=sys.stderr,
         )
         return 2
+
+    resolved_model = None
+    if args.generate_candidates:
+        resolved_model = args.llm_model or os.environ.get("DATA_TEST_AGENT_LLM_MODEL")
+        if not resolved_model:
+            print(
+                "Error: --generate-candidates requires --llm-model or DATA_TEST_AGENT_LLM_MODEL.",
+                file=sys.stderr,
+            )
+            return 2
+        if not os.environ.get("OPENAI_API_KEY"):
+            print(
+                "Error: OPENAI_API_KEY is required when --generate-candidates is used.",
+                file=sys.stderr,
+            )
+            return 2
 
     try:
         ingested = load_dataset(args.input, sheet_name=args.sheet)
@@ -293,28 +368,99 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     payload_path = write_json_artifact(output_dir, PAYLOAD_FILE_NAME, payload)
 
+    llm_metadata = None
+    if args.generate_candidates:
+        assert resolved_model is not None
+        try:
+            # The LLM receives only the safe evidence payload. Its structured
+            # output is not trusted; deterministic validation below remains the
+            # authoritative gate before any optional local execution.
+            candidate_entries = generate_candidate_tests_with_openai(
+                test_suggestion_payload=payload,
+                model=resolved_model,
+                max_candidates=args.max_candidates,
+            )
+        except CandidateGenerationError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 2
+        llm_candidate_artifact = build_llm_candidate_tests_artifact(
+            candidate_tests=candidate_entries,
+            source_payload_artifact=str(payload_path),
+            model=resolved_model,
+            max_candidates=args.max_candidates,
+        )
+        llm_candidate_path = write_json_artifact(
+            output_dir,
+            LLM_CANDIDATE_TESTS_FILE_NAME,
+            llm_candidate_artifact,
+        )
+        validation_result = validate_candidate_tests(
+            candidate_entries=candidate_entries,
+            profile=profile,
+            context=context,
+        )
+        llm_metadata = {
+            "candidate_source": "llm_generation",
+            "model": resolved_model,
+            "max_candidates": args.max_candidates,
+            "generated_candidate_count": len(candidate_entries),
+            "llm_candidate_tests_path": str(llm_candidate_path),
+            "llm_called": True,
+            "raw_rows_sent_to_llm": False,
+        }
+
     candidate_metadata = None
     execution_metadata = None
+    generated_by_agent = bool(args.generate_candidates)
+    llm_called = bool(args.generate_candidates)
     if validation_result is not None:
         validated_path = write_json_artifact(
             output_dir,
             VALIDATED_SUGGESTIONS_FILE_NAME,
-            build_validated_suggestions_artifact(validation_result),
+            build_validated_suggestions_artifact(
+                validation_result,
+                candidate_tests_generated_by_this_agent=generated_by_agent,
+                llm_called=llm_called,
+            ),
         )
         rejected_path = write_json_artifact(
             output_dir,
             REJECTED_SUGGESTIONS_FILE_NAME,
-            build_rejected_suggestions_artifact(validation_result),
+            build_rejected_suggestions_artifact(
+                validation_result,
+                candidate_tests_generated_by_this_agent=generated_by_agent,
+                llm_called=llm_called,
+            ),
         )
-        candidate_metadata = {
-            "candidates_path": str(args.candidates),
-            "candidates_file_name": Path(args.candidates).name,
-            "input_candidate_count": validation_result.input_candidate_count,
-            "validated_candidate_count": validation_result.validated_count,
-            "rejected_candidate_count": validation_result.rejected_count,
-            "validated_test_suggestions_path": str(validated_path),
-            "rejected_test_suggestions_path": str(rejected_path),
-        }
+        if args.generate_candidates:
+            candidate_metadata = {
+                "candidate_source": "llm_generation",
+                "llm_called": True,
+                "raw_rows_sent_to_llm": False,
+                "model": resolved_model,
+                "max_candidates": args.max_candidates,
+                "input_candidate_count": validation_result.input_candidate_count,
+                "generated_candidate_count": validation_result.input_candidate_count,
+                "validated_candidate_count": validation_result.validated_count,
+                "rejected_candidate_count": validation_result.rejected_count,
+                "validated_test_suggestions_path": str(validated_path),
+                "rejected_test_suggestions_path": str(rejected_path),
+            }
+            if llm_metadata is not None:
+                llm_metadata["validated_candidate_count"] = validation_result.validated_count
+                llm_metadata["rejected_candidate_count"] = validation_result.rejected_count
+        else:
+            candidate_metadata = {
+                "candidate_source": "manual_file",
+                "llm_called": False,
+                "candidates_path": str(args.candidates),
+                "candidates_file_name": Path(args.candidates).name,
+                "input_candidate_count": validation_result.input_candidate_count,
+                "validated_candidate_count": validation_result.validated_count,
+                "rejected_candidate_count": validation_result.rejected_count,
+                "validated_test_suggestions_path": str(validated_path),
+                "rejected_test_suggestions_path": str(rejected_path),
+            }
 
         if args.execute_candidates:
             # Execution is opt-in and runs only candidates that passed validation.
@@ -327,6 +473,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             execution_artifact = build_test_execution_results_artifact(
                 validated_candidate_count=validation_result.validated_count,
                 execution_results=execution_results,
+                candidate_tests_generated_by_this_agent=generated_by_agent,
+                llm_called=llm_called,
             )
             execution_path = write_json_artifact(
                 output_dir,
@@ -350,6 +498,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         context_metadata=context_metadata,
         candidate_metadata=candidate_metadata,
         execution_metadata=execution_metadata,
+        llm_metadata=llm_metadata,
     )
     write_json_artifact(output_dir, TRACE_FILE_NAME, trace)
 
@@ -358,21 +507,4 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"Trace written to {trace_path}. Profile written to {profile_path}. "
         f"Payload written to {payload_path}."
     )
-    if validation_result is not None:
-        print(
-            "Candidate validation completed. "
-            f"Validated {validation_result.validated_count} candidate(s) and "
-            f"rejected {validation_result.rejected_count} candidate(s)."
-        )
-    if execution_metadata is not None:
-        print(
-            "Deterministic candidate execution completed. "
-            f"Executed {execution_metadata['executed_candidate_count']} candidate(s), "
-            f"passed {execution_metadata['passed_candidate_count']}, and "
-            f"failed {execution_metadata['failed_candidate_count']}."
-        )
     return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
