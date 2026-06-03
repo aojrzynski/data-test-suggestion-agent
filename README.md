@@ -20,8 +20,9 @@ The project supports:
 - optional OpenAI-backed candidate generation with `--generate-candidates`
 - deterministic validation of all manual or generated candidates
 - optional deterministic local execution of validated candidates with `--execute-candidates`
+- optional deterministic Markdown review reporting with `--write-report`
 
-The LLM role is the heavier but bounded role: it can propose structured candidate test JSON from `test_suggestion_payload.json`-style safe evidence only. It does not see raw dataset rows, source files, sampled records, top values, distinct value lists, execution rows, API keys, or local source previews. Generated candidates are immediately passed through deterministic validation and may be rejected. Execution remains optional, deterministic, local-only, aggregate-only, and limited to validated candidates.
+The LLM role is the heavier but bounded role: it can propose structured candidate test JSON from `test_suggestion_payload.json`-style safe evidence only. It does not see raw dataset rows, source files, sampled records, top values, distinct value lists, execution rows, API keys, or local source previews. Generated candidates are immediately passed through deterministic validation and may be rejected. Execution remains optional, deterministic, local-only, aggregate-only, and limited to validated candidates. Report generation is also deterministic and local; it does not call an LLM, approve tests, claim final coverage, or include raw rows or raw failing rows.
 
 ## Install
 
@@ -98,6 +99,18 @@ data-test-suggestion-agent \
   --output-dir outputs
 ```
 
+Write a deterministic human review report for manual candidates and aggregate execution results:
+
+```bash
+data-test-suggestion-agent \
+  --input sample_data/customers/customers_for_test_suggestions.csv \
+  --context config/examples/customer_dataset_context.yaml \
+  --candidates config/examples/customer_candidate_tests_with_rejections.json \
+  --execute-candidates \
+  --write-report \
+  --output-dir outputs
+```
+
 Generate bounded LLM candidate suggestions from safe evidence only:
 
 ```bash
@@ -121,6 +134,21 @@ data-test-suggestion-agent \
   --generate-candidates \
   --max-candidates 8 \
   --execute-candidates \
+  --output-dir outputs
+```
+
+Generate candidates, execute validated candidates, and write a deterministic human review report:
+
+```bash
+export OPENAI_API_KEY="..."
+export DATA_TEST_AGENT_LLM_MODEL="your-model-name"
+
+data-test-suggestion-agent \
+  --input sample_data/customers/customers_for_test_suggestions.csv \
+  --context config/examples/customer_dataset_context.yaml \
+  --generate-candidates \
+  --execute-candidates \
+  --write-report \
   --output-dir outputs
 ```
 
@@ -187,6 +215,12 @@ Any validation run with `--execute-candidates` also creates:
 outputs/test_execution_results.json
 ```
 
+Any input-mode run with `--write-report` also creates:
+
+```text
+outputs/test_suggestion_report.md
+```
+
 ## Artifact meanings
 
 `dataset_profile.json` contains deterministic aggregate evidence such as row count, column count, column names, dtypes, null counts, unique counts, numeric bounds/means, text length statistics, and date parse statistics. It intentionally avoids raw rows, example values, top values, distinct value lists, sampled records, and source previews.
@@ -200,6 +234,8 @@ outputs/test_execution_results.json
 `rejected_test_suggestions.json` contains candidates rejected by deterministic validation, with reason codes and messages. Generated candidates may be rejected for unsupported types, unknown columns, unsafe fields, parameter-shape problems, profile/context incompatibility, or other deterministic rules.
 
 `test_execution_results.json` is written only with `--execute-candidates`. It executes validated candidates with fixed local pandas/Python logic for supported test types. Rejected candidates are not executed. Failed checks are data-quality outcomes and do not make the CLI exit non-zero. Execution results are not approved tests and contain aggregate counts only.
+
+`test_suggestion_report.md` is written only with `--write-report` in input mode. It is a deterministic local Markdown report for human review, generated from in-memory artifacts already produced during the run. Report generation does not call an LLM or use Markdown rendering dependencies. The report does not approve tests, create official coverage, make legal/compliance/privacy verdicts, include raw rows, include sampled records, include raw failing rows, or include raw failing values.
 
 ## Candidate validation contract
 
@@ -244,6 +280,7 @@ Expected clean failures include:
 - `--generate-candidates` requires `--input`.
 - `--sheet` requires `--input` and is only valid for Excel inputs.
 - `--execute-candidates` requires either `--candidates` or `--generate-candidates` with `--input`.
+- `--write-report` requires `--input`.
 - `--generate-candidates` and `--candidates` cannot be used together.
 - `--generate-candidates` requires a resolved model and `OPENAI_API_KEY`.
 - OpenAI SDK/API errors fail cleanly without long tracebacks.

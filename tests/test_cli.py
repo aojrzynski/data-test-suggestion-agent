@@ -13,6 +13,7 @@ from data_test_suggestion_agent.llm_candidate_generator import CandidateGenerati
 from data_test_suggestion_agent.output_writers import (
     PAYLOAD_FILE_NAME,
     PROFILE_FILE_NAME,
+    REPORT_FILE_NAME,
     REJECTED_SUGGESTIONS_FILE_NAME,
     LLM_CANDIDATE_TESTS_FILE_NAME,
     TEST_EXECUTION_RESULTS_FILE_NAME,
@@ -41,6 +42,7 @@ def test_cli_writes_scaffold_trace_without_profile(tmp_path, capsys):
     assert not (output_dir / VALIDATED_SUGGESTIONS_FILE_NAME).exists()
     assert not (output_dir / REJECTED_SUGGESTIONS_FILE_NAME).exists()
     assert not (output_dir / TEST_EXECUTION_RESULTS_FILE_NAME).exists()
+    assert not (output_dir / REPORT_FILE_NAME).exists()
     assert str(trace_path) in capsys.readouterr().out
 
     trace = json.loads(trace_path.read_text(encoding="utf-8"))
@@ -54,6 +56,7 @@ def test_cli_writes_scaffold_trace_without_profile(tmp_path, capsys):
     assert trace["stages"]["candidate_loading"] == "not_requested"
     assert trace["stages"]["suggestion_validation"] == "not_requested"
     assert trace["stages"]["test_execution"] == "not_requested"
+    assert trace["stages"]["reporting"] == "not_requested"
 
 
 def test_cli_input_mode_writes_trace_profile_and_payload(tmp_path, capsys):
@@ -72,6 +75,7 @@ def test_cli_input_mode_writes_trace_profile_and_payload(tmp_path, capsys):
     assert not (output_dir / VALIDATED_SUGGESTIONS_FILE_NAME).exists()
     assert not (output_dir / REJECTED_SUGGESTIONS_FILE_NAME).exists()
     assert not (output_dir / TEST_EXECUTION_RESULTS_FILE_NAME).exists()
+    assert not (output_dir / REPORT_FILE_NAME).exists()
     output = capsys.readouterr().out
     assert str(trace_path) in output
     assert str(profile_path) in output
@@ -87,6 +91,7 @@ def test_cli_input_mode_writes_trace_profile_and_payload(tmp_path, capsys):
     assert trace["stages"]["suggestion_validation"] == "not_requested"
     assert trace["stages"]["test_execution"] == "not_requested"
     assert trace["stages"]["llm_suggestions"] == "not_requested"
+    assert trace["stages"]["reporting"] == "not_requested"
     assert "context_metadata" not in trace
     assert trace["dataset_metadata"]["file_name"] == "customers_for_test_suggestions.csv"
     assert trace["dataset_metadata"]["row_count"] == 24
@@ -284,6 +289,7 @@ def test_help_works(capsys):
     assert "--context" in output
     assert "--candidates" in output
     assert "--output-dir" in output
+    assert "--write-report" in output
 
 
 def test_version_works(capsys):
@@ -663,6 +669,187 @@ def test_execution_results_do_not_include_raw_dataset_samples(tmp_path):
     assert "unexpected_values" not in execution_text
     assert "failing_values" not in execution_text
 
+
+
+def test_cli_write_report_without_input_fails_cleanly(tmp_path, capsys):
+    """--write-report should require an input-mode run and avoid scaffold output."""
+    output_dir = tmp_path / "outputs"
+
+    exit_code = main(["--write-report", "--output-dir", str(output_dir)])
+
+    assert exit_code != 0
+    captured = capsys.readouterr()
+    assert "--write-report requires --input" in captured.err
+    assert "Traceback" not in captured.err
+    assert not (output_dir / TRACE_FILE_NAME).exists()
+    assert not (output_dir / REPORT_FILE_NAME).exists()
+
+
+def test_cli_input_only_with_write_report_writes_report_and_trace(tmp_path):
+    """Input-only report mode should write report and mark reporting completed."""
+    output_dir = tmp_path / "outputs"
+
+    exit_code = main(
+        [
+            "--input",
+            str(SAMPLE_DATASET),
+            "--write-report",
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 0
+    report_path = output_dir / REPORT_FILE_NAME
+    assert report_path.is_file()
+    assert not (output_dir / VALIDATED_SUGGESTIONS_FILE_NAME).exists()
+    report = report_path.read_text(encoding="utf-8")
+    assert "No candidate generation or validation was requested." in report
+    assert "Candidate validation was not requested." in report
+    assert "Candidate execution was not requested." in report
+    assert "alex.rivera@example.com" not in report
+    assert "blair.chen@example.com" not in report
+    assert "CUST-0001" not in report
+
+    trace = json.loads((output_dir / TRACE_FILE_NAME).read_text(encoding="utf-8"))
+    assert trace["run_status"] == "evidence_payload_completed"
+    assert trace["stages"]["reporting"] == "completed"
+    assert trace["artifact_paths"]["test_suggestion_report"] == str(report_path)
+
+
+def test_cli_input_with_context_and_write_report_includes_context(tmp_path):
+    """Context report mode should include human-authored context summary."""
+    output_dir = tmp_path / "outputs"
+
+    exit_code = main(
+        [
+            "--input",
+            str(SAMPLE_DATASET),
+            "--context",
+            str(SAMPLE_CONTEXT),
+            "--write-report",
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 0
+    report = (output_dir / REPORT_FILE_NAME).read_text(encoding="utf-8")
+    assert "## Human-authored context summary" in report
+    assert "Dataset name: synthetic_customer_dataset" in report
+    assert "Business caveat count: 2" in report
+
+
+def test_cli_input_with_candidates_and_write_report_includes_validation(tmp_path):
+    """Manual candidate report mode should include validation sections."""
+    output_dir = tmp_path / "outputs"
+
+    exit_code = main(
+        [
+            "--input",
+            str(SAMPLE_DATASET),
+            "--candidates",
+            str(MIXED_CANDIDATES),
+            "--write-report",
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 0
+    report = (output_dir / REPORT_FILE_NAME).read_text(encoding="utf-8")
+    assert "Candidate source: Manual candidate file used." in report
+    assert "## Validation summary" in report
+    assert "Validated count: 2" in report
+    assert "Rejected count: 6" in report
+    assert "### Rejected candidates" in report
+    assert "unknown_column" in report
+    trace = json.loads((output_dir / TRACE_FILE_NAME).read_text(encoding="utf-8"))
+    assert trace["stages"]["reporting"] == "completed"
+
+
+def test_cli_input_with_candidates_execute_and_write_report_includes_execution(tmp_path):
+    """Execution report mode should include aggregate execution sections."""
+    output_dir = tmp_path / "outputs"
+
+    exit_code = main(
+        [
+            "--input",
+            str(SAMPLE_DATASET),
+            "--candidates",
+            str(MIXED_CANDIDATES),
+            "--execute-candidates",
+            "--write-report",
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 0
+    report = (output_dir / REPORT_FILE_NAME).read_text(encoding="utf-8")
+    assert "## Execution summary" in report
+    assert "Executed count: 2" in report
+    assert "Failed checks are review outcomes, not CLI/process failures." in report
+    assert "raw failing rows" in report
+    assert "alex.rivera@example.com" not in report
+
+
+def test_cli_generated_candidate_mode_with_write_report(tmp_path, monkeypatch):
+    """Generated candidate report mode should summarize LLM provenance safely."""
+    output_dir = tmp_path / "outputs"
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("DATA_TEST_AGENT_LLM_MODEL", "test-model")
+    monkeypatch.setattr(
+        "data_test_suggestion_agent.cli.generate_candidate_tests_with_openai",
+        lambda **kwargs: _generated_candidates(),
+    )
+
+    exit_code = main(
+        [
+            "--input",
+            str(SAMPLE_DATASET),
+            "--generate-candidates",
+            "--write-report",
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 0
+    report = (output_dir / REPORT_FILE_NAME).read_text(encoding="utf-8")
+    assert "Candidate source: LLM-generated candidates used." in report
+    assert "Model name: test-model" in report
+    assert "Generated candidate count: 2" in report
+    assert "raw_rows_sent_to_llm = false" in report
+    assert "Generated candidates are not approved tests." in report
+    trace = json.loads((output_dir / TRACE_FILE_NAME).read_text(encoding="utf-8"))
+    assert trace["llm_generation"]["llm_called"] is True
+    assert trace["stages"]["reporting"] == "completed"
+
+
+def test_cli_report_not_written_on_clean_failure(tmp_path, capsys):
+    """Clean failure paths should not leave a partial report artifact."""
+    output_dir = tmp_path / "outputs"
+    bad_candidates = tmp_path / "bad.json"
+    bad_candidates.write_text("{not json", encoding="utf-8")
+
+    exit_code = main(
+        [
+            "--input",
+            str(SAMPLE_DATASET),
+            "--candidates",
+            str(bad_candidates),
+            "--write-report",
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code != 0
+    captured = capsys.readouterr()
+    assert "Malformed candidate JSON" in captured.err
+    assert "Traceback" not in captured.err
+    assert not (output_dir / REPORT_FILE_NAME).exists()
 
 def _generated_candidates() -> list[dict[str, object]]:
     """Return deterministic fake LLM candidates for CLI tests."""

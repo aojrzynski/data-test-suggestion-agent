@@ -1,4 +1,4 @@
-"""Command-line interface for local profiling, bounded candidate generation, validation, and execution."""
+"""Command-line interface for local profiling, candidate workflows, execution, and reporting."""
 
 from __future__ import annotations
 
@@ -38,13 +38,16 @@ from data_test_suggestion_agent.output_writers import (
     LLM_CANDIDATE_TESTS_FILE_NAME,
     PAYLOAD_FILE_NAME,
     PROFILE_FILE_NAME,
+    REPORT_FILE_NAME,
     REJECTED_SUGGESTIONS_FILE_NAME,
     TEST_EXECUTION_RESULTS_FILE_NAME,
     VALIDATED_SUGGESTIONS_FILE_NAME,
     TRACE_FILE_NAME,
     write_json_artifact,
+    write_text_artifact,
 )
 from data_test_suggestion_agent.profiling import profile_dataset
+from data_test_suggestion_agent.report_generator import build_review_report
 
 AGENT_NAME = "data-test-suggestion-agent"
 PACKAGE_NAME = "data_test_suggestion_agent"
@@ -69,7 +72,8 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Profile a local CSV/XLSX/XLSM dataset into safe aggregate evidence. "
             "Optionally validate manual candidates, generate bounded LLM candidates "
-            "from safe evidence only, and execute validated candidates locally."
+            "from safe evidence only, execute validated candidates locally, and "
+            "optionally write a deterministic human review report."
         ),
     )
     parser.add_argument(
@@ -109,6 +113,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Execute locally validated candidate tests with deterministic aggregate-only logic.",
     )
     parser.add_argument(
+        "--write-report",
+        action="store_true",
+        help="Write a deterministic local Markdown report for human review only.",
+    )
+    parser.add_argument(
         "--output-dir",
         default="outputs",
         help="Directory where JSON artifacts will be written.",
@@ -130,6 +139,7 @@ def build_scaffold_trace() -> dict[str, object]:
     stages["candidate_loading"] = "not_requested"
     stages["suggestion_validation"] = "not_requested"
     stages["test_execution"] = "not_requested"
+    stages["reporting"] = "not_requested"
     return {
         "agent_name": AGENT_NAME,
         "package_name": PACKAGE_NAME,
@@ -155,6 +165,7 @@ def build_profile_trace(
     candidate_metadata: dict[str, object] | None = None,
     execution_metadata: dict[str, object] | None = None,
     llm_metadata: dict[str, object] | None = None,
+    report_path: Path | None = None,
 ) -> dict[str, object]:
     """Return a trace payload for a completed intake/profile run."""
     stages = {stage: "not_implemented" for stage in FUTURE_STAGES}
@@ -176,6 +187,7 @@ def build_profile_trace(
     stages["test_execution"] = (
         "completed" if execution_metadata is not None else "not_requested"
     )
+    stages["reporting"] = "completed" if report_path is not None else "not_requested"
 
     if execution_metadata is not None:
         run_status = "test_execution_completed"
@@ -200,7 +212,11 @@ def build_profile_trace(
         "package_name": PACKAGE_NAME,
         "package_version": __version__,
         "run_status": run_status,
-        "message": message,
+        "message": (
+            f"{message} Human review report was written."
+            if report_path is not None
+            else message
+        ),
         "dataset_metadata": metadata,
         "artifact_paths": {
             "trace": str(trace_path),
@@ -235,6 +251,10 @@ def build_profile_trace(
             artifact_paths["test_execution_results"] = execution_metadata[
                 "test_execution_results_path"
             ]
+    if report_path is not None:
+        artifact_paths = trace["artifact_paths"]
+        if isinstance(artifact_paths, dict):
+            artifact_paths["test_suggestion_report"] = str(report_path)
     return trace
 
 
@@ -305,6 +325,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.execute_candidates:
             print(
                 "Error: --execute-candidates requires --input and candidate validation so validated candidates can be executed locally.",
+                file=sys.stderr,
+            )
+            return 2
+        if args.write_report:
+            print(
+                "Error: --write-report requires --input so a deterministic human review report can summarize a completed dataset run.",
                 file=sys.stderr,
             )
             return 2
@@ -411,26 +437,31 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     candidate_metadata = None
     execution_metadata = None
+    validated_suggestions_artifact = None
+    rejected_suggestions_artifact = None
+    execution_artifact = None
     generated_by_agent = bool(args.generate_candidates)
     llm_called = bool(args.generate_candidates)
     if validation_result is not None:
+        validated_suggestions_artifact = build_validated_suggestions_artifact(
+            validation_result,
+            candidate_tests_generated_by_this_agent=generated_by_agent,
+            llm_called=llm_called,
+        )
+        rejected_suggestions_artifact = build_rejected_suggestions_artifact(
+            validation_result,
+            candidate_tests_generated_by_this_agent=generated_by_agent,
+            llm_called=llm_called,
+        )
         validated_path = write_json_artifact(
             output_dir,
             VALIDATED_SUGGESTIONS_FILE_NAME,
-            build_validated_suggestions_artifact(
-                validation_result,
-                candidate_tests_generated_by_this_agent=generated_by_agent,
-                llm_called=llm_called,
-            ),
+            validated_suggestions_artifact,
         )
         rejected_path = write_json_artifact(
             output_dir,
             REJECTED_SUGGESTIONS_FILE_NAME,
-            build_rejected_suggestions_artifact(
-                validation_result,
-                candidate_tests_generated_by_this_agent=generated_by_agent,
-                llm_called=llm_called,
-            ),
+            rejected_suggestions_artifact,
         )
         if args.generate_candidates:
             candidate_metadata = {
@@ -489,6 +520,37 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "test_execution_results_path": str(execution_path),
             }
 
+    report_path = None
+    if args.write_report:
+        report_path = output_dir / REPORT_FILE_NAME
+        artifact_paths = {
+            "trace": str(output_dir / TRACE_FILE_NAME),
+            "dataset_profile": str(profile_path),
+            "test_suggestion_payload": str(payload_path),
+        }
+        if llm_metadata is not None:
+            artifact_paths["llm_candidate_tests"] = str(output_dir / LLM_CANDIDATE_TESTS_FILE_NAME)
+        if validated_suggestions_artifact is not None:
+            artifact_paths["validated_test_suggestions"] = str(output_dir / VALIDATED_SUGGESTIONS_FILE_NAME)
+            artifact_paths["rejected_test_suggestions"] = str(output_dir / REJECTED_SUGGESTIONS_FILE_NAME)
+        if execution_artifact is not None:
+            artifact_paths["test_execution_results"] = str(output_dir / TEST_EXECUTION_RESULTS_FILE_NAME)
+        artifact_paths["test_suggestion_report"] = str(report_path)
+        report = build_review_report(
+            profile=profile,
+            payload=payload,
+            context=context,
+            context_metadata=context_metadata,
+            llm_metadata=llm_metadata,
+            candidate_validation_artifact=validated_suggestions_artifact,
+            rejected_suggestions_artifact=rejected_suggestions_artifact,
+            execution_artifact=execution_artifact,
+            artifact_paths=artifact_paths,
+        )
+        # The report is generated after all prior stages succeed so clean
+        # failure paths never leave a partial review artifact behind.
+        write_text_artifact(output_dir, REPORT_FILE_NAME, report)
+
     trace_path = output_dir / TRACE_FILE_NAME
     trace = build_profile_trace(
         metadata=ingested.metadata.to_dict(),
@@ -499,6 +561,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         candidate_metadata=candidate_metadata,
         execution_metadata=execution_metadata,
         llm_metadata=llm_metadata,
+        report_path=report_path,
     )
     write_json_artifact(output_dir, TRACE_FILE_NAME, trace)
 
@@ -506,5 +569,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         "Dataset intake, safe profiling, and evidence payload construction completed. "
         f"Trace written to {trace_path}. Profile written to {profile_path}. "
         f"Payload written to {payload_path}."
+        + (f" Report written to {report_path}." if report_path is not None else "")
     )
     return 0
