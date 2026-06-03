@@ -1,6 +1,6 @@
 # Data Test Suggestion Agent
 
-Data Test Suggestion Agent is a local-first Python CLI agent that profiles a dataset, builds safe aggregate evidence, optionally uses an LLM to propose candidate data tests, validates those candidates deterministically, optionally executes validated checks, and writes a human review report.
+Data Test Suggestion Agent is a local-first Python CLI agent that profiles a dataset, builds safe aggregate evidence, optionally uses an LLM to propose candidate data tests, validates those candidates deterministically, optionally executes validated checks, and writes a human-readible review report.
 
 It helps answer one practical question:
 
