@@ -37,6 +37,19 @@ class _FakeClient:
         self.responses = _FakeResponses(response=response, error=error)
 
 
+def _candidate(index: int) -> dict[str, object]:
+    """Return a parseable fake LLM candidate."""
+    return {
+        "test_id": f"customer_id_not_null_{index}",
+        "test_type": "not_null",
+        "column": "customer_id",
+        "severity": "high",
+        "parameters": {},
+        "rationale": "Important field in safe evidence.",
+        "suggested_by": "llm_candidate",
+    }
+
+
 def test_parse_valid_llm_response_and_normalizes_missing_parameters():
     """Only omitted parameters should be normalized before validation."""
     parsed = parse_llm_candidate_response_text(
@@ -162,6 +175,29 @@ def test_fake_successful_client_returns_parsed_candidates():
     assert candidates[0]["test_id"] == "customer_id_not_null"
     assert client.responses.calls[0]["model"] == "test-model"
     assert client.responses.calls[0]["text"]["format"]["type"] == "json_schema"
+
+
+def test_fake_client_returning_too_many_candidates_fails_cleanly():
+    """The wrapper should enforce --max-candidates instead of truncating."""
+    response = _FakeResponse(
+        json.dumps({"candidate_tests": [_candidate(1), _candidate(2), _candidate(3)]})
+    )
+    client = _FakeClient(response=response)
+
+    with pytest.raises(
+        CandidateGenerationError,
+        match="LLM returned more candidates than --max-candidates allows",
+    ):
+        generate_candidate_tests_with_openai(
+            test_suggestion_payload={"payload_metadata": {"contains_raw_rows": False}},
+            model="test-model",
+            max_candidates=2,
+            api_key="test-key",
+            client=client,
+        )
+
+    assert len(client.responses.calls) == 1
+    assert client.responses.calls[0]["model"] == "test-model"
 
 
 def test_fake_api_error_is_clean_candidate_generation_error():

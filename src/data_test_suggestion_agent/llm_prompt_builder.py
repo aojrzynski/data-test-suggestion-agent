@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 from typing import Any
 
@@ -40,7 +41,7 @@ def build_llm_candidate_prompt(
         "allowed_test_types": sorted(ALLOWED_TEST_TYPES),
         "required_output_shape": {"candidate_tests": ["candidate objects"]},
         "schema": schema,
-        "safe_evidence_payload": test_suggestion_payload,
+        "safe_evidence_payload": sanitize_payload_for_llm(test_suggestion_payload),
         "boundaries": {
             "raw_rows_sent": False,
             "example_values_sent": False,
@@ -57,3 +58,23 @@ def build_llm_candidate_prompt(
             "content": json.dumps(user_payload, indent=2, sort_keys=True),
         },
     ]
+
+
+def sanitize_payload_for_llm(test_suggestion_payload: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of the safe payload with local-only path details removed.
+
+    The LLM needs dataset names, column names, and aggregate evidence to propose
+    candidates, but it does not need local filesystem paths. Removing
+    ``dataset_evidence.metadata.input_path`` avoids sending absolute paths when
+    users provide them while preserving the local artifact unchanged.
+    """
+    sanitized_payload = copy.deepcopy(test_suggestion_payload)
+    dataset_evidence = sanitized_payload.get("dataset_evidence")
+    if isinstance(dataset_evidence, dict):
+        metadata = dataset_evidence.get("metadata")
+        if isinstance(metadata, dict):
+            # Local paths are not useful evidence for data-test suggestions and
+            # should not be sent to an LLM when avoidable. Keep row-safe file
+            # metadata, column names, and aggregate profile evidence intact.
+            metadata.pop("input_path", None)
+    return sanitized_payload

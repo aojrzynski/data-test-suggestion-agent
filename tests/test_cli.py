@@ -9,6 +9,7 @@ import pytest
 
 from data_test_suggestion_agent import __version__
 from data_test_suggestion_agent.cli import FUTURE_STAGES, main
+from data_test_suggestion_agent.llm_candidate_generator import CandidateGenerationError
 from data_test_suggestion_agent.output_writers import (
     PAYLOAD_FILE_NAME,
     PROFILE_FILE_NAME,
@@ -841,6 +842,46 @@ def test_cli_generated_candidate_mode_with_execution_writes_results(tmp_path, mo
     executed_ids = {result["test_id"] for result in execution["execution_results"]}
     assert executed_ids == {"customer_id_not_null_generated"}
     assert "unknown_generated" not in executed_ids
+
+
+def test_cli_generation_error_writes_no_llm_validation_or_execution_artifacts(
+    tmp_path, capsys, monkeypatch
+):
+    """Generation failures such as too many candidates should not write partial artifacts."""
+    output_dir = tmp_path / "outputs"
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    def fake_generator(**kwargs):
+        raise CandidateGenerationError(
+            "LLM returned more candidates than --max-candidates allows."
+        )
+
+    monkeypatch.setattr(
+        "data_test_suggestion_agent.cli.generate_candidate_tests_with_openai",
+        fake_generator,
+    )
+
+    exit_code = main(
+        [
+            "--input",
+            str(SAMPLE_DATASET),
+            "--generate-candidates",
+            "--llm-model",
+            "test-model",
+            "--execute-candidates",
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code != 0
+    captured = capsys.readouterr()
+    assert "LLM returned more candidates than --max-candidates allows" in captured.err
+    assert "Traceback" not in captured.err
+    assert not (output_dir / LLM_CANDIDATE_TESTS_FILE_NAME).exists()
+    assert not (output_dir / VALIDATED_SUGGESTIONS_FILE_NAME).exists()
+    assert not (output_dir / REJECTED_SUGGESTIONS_FILE_NAME).exists()
+    assert not (output_dir / TEST_EXECUTION_RESULTS_FILE_NAME).exists()
 
 
 def test_llm_candidate_artifact_does_not_include_raw_dataset_samples(tmp_path, monkeypatch):

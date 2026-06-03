@@ -117,7 +117,12 @@ def generate_candidate_tests_with_openai(
         raise CandidateGenerationError(f"OpenAI candidate generation failed: {exc}") from exc
 
     response_text = _extract_response_text(response)
-    return parse_llm_candidate_response_text(response_text)
+    candidate_tests = parse_llm_candidate_response_text(response_text)
+    if len(candidate_tests) > max_candidates:
+        raise CandidateGenerationError(
+            "LLM returned more candidates than --max-candidates allows."
+        )
+    return candidate_tests
 
 
 def _extract_response_text(response: Any) -> str:
