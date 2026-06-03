@@ -70,7 +70,7 @@ def candidate(**overrides):
     ],
 )
 def test_validates_allowed_candidate_types(profile, context, entry):
-    """All PR #5 candidate test types should validate when shaped correctly."""
+    """All supported candidate test types should validate when shaped correctly."""
     result = validate_candidate_tests(candidate_entries=[entry], profile=profile, context=context)
 
     assert result.validated_count == 1

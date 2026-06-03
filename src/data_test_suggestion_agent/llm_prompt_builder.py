@@ -1,4 +1,9 @@
-"""Prompt construction for bounded LLM candidate test generation."""
+"""Prompt construction for bounded LLM candidate test generation.
+
+This module turns the safe evidence payload into prompt messages. It does not
+call an LLM, read source data, or decide whether generated candidates are valid;
+those responsibilities stay with generation and deterministic validation.
+"""
 
 from __future__ import annotations
 
@@ -9,6 +14,9 @@ from typing import Any
 from data_test_suggestion_agent.candidate_models import ALLOWED_TEST_TYPES
 from data_test_suggestion_agent.llm_schema import build_llm_candidate_response_schema
 
+# The prompt repeats boundaries that are also enforced by code. Prompt text is
+# useful guidance for the model, but deterministic validators and artifact
+# builders remain the actual safety mechanisms.
 SYSTEM_PROMPT = """You are helping a local-first data test suggestion agent.
 Produce candidate data test suggestions only. You are not authoritative.
 You must not approve tests, claim coverage is complete, or make legal, compliance, privacy, or governance verdicts.
@@ -35,6 +43,8 @@ def build_llm_candidate_prompt(
     repeats that structured output is still subject to deterministic validation.
     """
     schema = build_llm_candidate_response_schema()
+    # Include schema and boundary facts in the user payload so the model sees
+    # the same output contract and safe-evidence limits as the local workflow.
     user_payload = {
         "task": "Generate structured candidate data tests from the safe evidence payload only.",
         "max_candidates": max_candidates,

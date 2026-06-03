@@ -78,6 +78,8 @@ def summarize_profile_for_payload(profile: DatasetProfile) -> dict[str, Any]:
     optional generation input and prevents accidental addition of preview-like
     fields to the payload if the profile artifact evolves.
     """
+    # This projection is the profile evidence that becomes eligible for
+    # optional LLM input, so keep the boundary visible at the handoff point.
     profile_dict = profile.to_dict()
     columns = [
         _without_disallowed_keys(column)
@@ -106,6 +108,8 @@ def summarize_context_for_payload(
     evidence. Field lists and notes are acceptable here because they come from
     validated human-authored YAML, not from copied dataset values.
     """
+    # Human-authored context may include field lists and notes because those
+    # entries come from the reviewer, not copied source-row values.
     if context is None:
         return {
             "provided": False,
@@ -162,7 +166,7 @@ def _payload_metadata() -> dict[str, Any]:
 
 
 def _authority_boundary() -> dict[str, Any]:
-    """Return explicit safety and authority limits for this PR's artifact."""
+    """Return explicit safety and authority limits for the evidence payload."""
     return {
         "candidate_tests_generated": False,
         "llm_called": False,

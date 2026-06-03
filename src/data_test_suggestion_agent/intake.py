@@ -1,4 +1,9 @@
-"""Dataset intake helpers for supported local file formats."""
+"""Dataset intake helpers for supported local file formats.
+
+Intake loads a local dataset, records safe metadata, and returns the DataFrame
+for later deterministic stages. It does not profile columns or inspect row
+values beyond what is required to read the file into pandas.
+"""
 
 from __future__ import annotations
 
@@ -55,6 +60,8 @@ def load_dataset(input_path: str, sheet_name: str | None = None) -> IngestedData
     except OSError as exc:
         raise IntakeError(f"Could not read input file: {exc}") from exc
 
+    # Column names and dataset shape are safe trace metadata: they identify what
+    # was loaded without including row values or data previews.
     metadata = DatasetMetadata(
         input_path=input_path,
         file_name=path.name,
@@ -86,6 +93,7 @@ def _read_excel(path: Path, requested_sheet_name: str | None) -> tuple[pd.DataFr
 
     # Defaulting to the first workbook sheet mirrors spreadsheet application
     # behavior while still recording the resolved sheet for reproducibility.
+    # Resolving the sheet explicitly makes repeated Excel runs comparable.
     loaded_sheet_name = requested_sheet_name or available_sheets[0]
     if loaded_sheet_name not in available_sheets:
         available = ", ".join(available_sheets)

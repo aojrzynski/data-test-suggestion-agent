@@ -1,4 +1,10 @@
-"""Optional OpenAI-backed bounded candidate test generation."""
+"""Optional OpenAI-backed bounded candidate test generation.
+
+LLM generation is an optional stage layered on top of deterministic local
+profiling. It uses only the safe evidence payload, keeps the OpenAI dependency
+lazy for non-LLM installs, persists candidate-shaped output but not raw prompts
+or raw responses, and relies on deterministic validation immediately afterward.
+"""
 
 from __future__ import annotations
 
@@ -15,7 +21,11 @@ from data_test_suggestion_agent.llm_schema import build_llm_candidate_response_s
 
 
 class CandidateGenerationError(ValueError):
-    """Expected user-facing LLM candidate generation failure."""
+    """Expected user-facing LLM candidate generation failure.
+
+    The CLI catches this error to turn SDK, configuration, API, and parsing
+    issues into concise messages instead of tracebacks.
+    """
 
 
 def parse_llm_candidate_response_text(response_text: str) -> list[dict[str, Any]]:
@@ -79,6 +89,8 @@ def generate_candidate_tests_with_openai(
     SDK import is lazy and only happens when LLM generation is requested. Tests
     can pass a fake client to avoid live API calls.
     """
+    # Resolve the API key at the generation boundary so deterministic non-LLM
+    # workflows do not require OpenAI configuration.
     resolved_api_key = api_key or os.environ.get("OPENAI_API_KEY")
     if not resolved_api_key:
         raise CandidateGenerationError(
@@ -86,6 +98,8 @@ def generate_candidate_tests_with_openai(
         )
 
     if client is None:
+        # Lazy import keeps deterministic installs free of the optional OpenAI
+        # dependency. Tests can pass a fake client to stay offline.
         try:
             from openai import OpenAI
         except ImportError as exc:
@@ -95,12 +109,16 @@ def generate_candidate_tests_with_openai(
             ) from exc
         client = OpenAI(api_key=resolved_api_key)
 
+    # The prompt is built from the safe evidence payload only; source files and
+    # raw rows are never handed to the generation client.
     messages = build_llm_candidate_prompt(
         test_suggestion_payload=test_suggestion_payload,
         max_candidates=max_candidates,
     )
     schema = build_llm_candidate_response_schema()
     try:
+        # Responses API structured output asks the model for the candidate JSON
+        # shape, but local validation still decides what is usable.
         response = client.responses.create(
             model=model,
             input=messages,
@@ -116,8 +134,11 @@ def generate_candidate_tests_with_openai(
     except Exception as exc:  # noqa: BLE001 - convert SDK/network failures for CLI users.
         raise CandidateGenerationError(f"OpenAI candidate generation failed: {exc}") from exc
 
+    # Parse the structured response into the shared candidate outer shape.
     response_text = _extract_response_text(response)
     candidate_tests = parse_llm_candidate_response_text(response_text)
+    # Enforce max_candidates after parsing because model instructions and JSON
+    # schema constraints are not enough by themselves.
     if len(candidate_tests) > max_candidates:
         raise CandidateGenerationError(
             "LLM returned more candidates than --max-candidates allows."
@@ -126,7 +147,11 @@ def generate_candidate_tests_with_openai(
 
 
 def _extract_response_text(response: Any) -> str:
-    """Extract JSON text from a Responses API object or test fake."""
+    """Extract JSON text from a Responses API object or test fake.
+
+    Supporting both SDK attributes and dictionary-shaped fakes keeps unit tests
+    offline while exercising the same parsing path used by real responses.
+    """
     output_text = getattr(response, "output_text", None)
     if isinstance(output_text, str) and output_text.strip():
         return output_text

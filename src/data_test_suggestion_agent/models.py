@@ -1,4 +1,9 @@
-"""Typed data models for dataset intake and safe profiling artifacts."""
+"""Typed data models for dataset intake and safe profiling artifacts.
+
+These dataclasses carry evidence between CLI workflow stages. They are kept
+plain and JSON-friendly so artifacts, tests, and orchestration code inspect the
+same structures rather than translating through a hidden runtime model.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +13,12 @@ from typing import Any
 
 @dataclass(frozen=True)
 class DatasetMetadata:
-    """Metadata describing an ingested dataset without storing row values."""
+    """Metadata describing an ingested dataset without storing row values.
+
+    This records file identity, shape, resolved worksheet, and column names only.
+    It is safe trace evidence about what was loaded, not a preview of source
+    records or field contents.
+    """
 
     input_path: str
     file_name: str
@@ -28,8 +38,9 @@ class DatasetContext:
     """Human-authored dataset context loaded from optional YAML.
 
     Context captures reviewer-provided meaning such as expected grain, known
-    field roles, and caveats. It is not deterministic profile evidence and does
-    not imply that any data test should be generated, accepted, or executed.
+    field roles, and caveats. It is human-authored meaning, not source-data
+    evidence, and it does not approve or require any generated, accepted, or
+    executed data test.
     """
 
     dataset_name: str | None = None
@@ -101,7 +112,12 @@ class ColumnProfile:
 
 @dataclass(frozen=True)
 class DatasetProfile:
-    """Safe aggregate profile evidence for an ingested dataset."""
+    """Safe aggregate profile evidence for an ingested dataset.
+
+    This is the dataset-level profile artifact consumed by the safe evidence
+    payload and later deterministic candidate validation. It summarizes shape
+    and per-column aggregates while preserving the row/value boundary.
+    """
 
     dataset_metadata: DatasetMetadata
     row_count: int

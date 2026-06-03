@@ -1,4 +1,10 @@
-"""Command-line orchestration for local profiling, suggestions, execution, and reporting."""
+"""Command-line orchestration for local profiling, suggestions, execution, and reporting.
+
+The CLI coordinates the bounded workflow end to end: input validation, local
+intake/profile/context loading, safe payload creation, optional manual or LLM
+candidate sourcing, deterministic validation, optional validated-only execution,
+optional deterministic reporting, and final trace writing.
+"""
 
 from __future__ import annotations
 
@@ -66,7 +72,11 @@ FUTURE_STAGES = (
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Build and return the CLI argument parser."""
+    """Build and return the CLI argument parser.
+
+    Parser construction has no side effects: it does not read datasets, create
+    output directories, call an LLM, or start any workflow stage.
+    """
     parser = argparse.ArgumentParser(
         prog=AGENT_NAME,
         description=(
@@ -131,7 +141,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def build_scaffold_trace() -> dict[str, object]:
-    """Return the deterministic no-input scaffold trace payload."""
+    """Return the deterministic no-input scaffold trace payload.
+
+    No-input scaffold mode is intentionally useful for smoke tests and for
+    proving the CLI can write a trace without touching source data.
+    """
     stages = {stage: "not_implemented" for stage in FUTURE_STAGES}
     stages["dataset_intake"] = "not_requested"
     stages["profiling"] = "not_requested"
@@ -168,6 +182,8 @@ def build_profile_trace(
     report_path: Path | None = None,
 ) -> dict[str, object]:
     """Return a trace payload for a completed intake/profile run."""
+    # Stage statuses are explicit so trace readers can distinguish completed,
+    # skipped, not-requested, and not-applicable workflow boundaries.
     stages = {stage: "not_implemented" for stage in FUTURE_STAGES}
     stages["dataset_intake"] = "completed"
     stages["profiling"] = "completed"
@@ -176,6 +192,8 @@ def build_profile_trace(
     )
     stages["evidence_payload"] = "completed"
     stages["llm_suggestions"] = "completed" if llm_metadata is not None else "not_requested"
+    # LLM candidates are generated in-memory from the safe payload, so the
+    # manual candidate file-loading stage is not applicable in that path.
     stages["candidate_loading"] = (
         "not_applicable"
         if llm_metadata is not None
@@ -187,6 +205,8 @@ def build_profile_trace(
     stages["test_execution"] = (
         "completed" if execution_metadata is not None else "not_requested"
     )
+    # Reporting is marked completed only after the report has been generated and
+    # its path is available; failed report generation should not be traced as done.
     stages["reporting"] = "completed" if report_path is not None else "not_requested"
 
     if execution_metadata is not None:
@@ -205,8 +225,9 @@ def build_profile_trace(
             "unless manual or LLM candidate generation is requested."
         )
 
-    # Context can inform later review workflows, but it is not a test suggestion
-    # and is intentionally kept out of dataset_profile.json.
+    # Context metadata is separate from dataset_profile.json because it is human-
+    # authored meaning, not deterministic evidence derived from the dataset.
+    # It can inform review, but it is not a test suggestion or approval.
     trace: dict[str, object] = {
         "agent_name": AGENT_NAME,
         "package_name": PACKAGE_NAME,
@@ -218,6 +239,8 @@ def build_profile_trace(
             else message
         ),
         "dataset_metadata": metadata,
+        # Artifact paths make each stage's durable output discoverable from the
+        # trace without changing the artifact payloads themselves.
         "artifact_paths": {
             "trace": str(trace_path),
             "dataset_profile": str(profile_path),
@@ -261,8 +284,7 @@ def build_profile_trace(
 def build_trace() -> dict[str, object]:
     """Return the deterministic no-input scaffold trace payload.
 
-    This compatibility wrapper keeps the PR #1 scaffold helper available while
-    the CLI grows dataset intake and profiling behavior.
+    Compatibility wrapper kept for earlier scaffold tests and callers.
     """
     return build_scaffold_trace()
 
@@ -282,14 +304,20 @@ def write_trace(output_dir: Path) -> Path:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the CLI and return a process exit code."""
+    # Parse arguments and perform basic option validation before any filesystem,
+    # profiling, LLM, execution, or report stage begins.
     parser = build_parser()
     args = parser.parse_args(argv)
     output_dir = Path(args.output_dir)
 
+    # Expected user errors return exit code 2 with concise messages rather than
+    # tracebacks; unexpected programming errors are left visible during testing.
     if args.generate_candidates and args.max_candidates < 1:
         print("Error: --max-candidates must be at least 1.", file=sys.stderr)
         return 2
 
+    # Manual candidate files and LLM generation are mutually exclusive sources
+    # for the same candidate validation gate.
     if args.generate_candidates and args.candidates is not None:
         print(
             "Error: use either --candidates for manual candidate input or --generate-candidates for LLM generation, not both.",
@@ -297,6 +325,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 2
 
+    # No-input scaffold path: accept a true smoke-test run, but reject options
+    # that would require a loaded dataset so users get clean errors.
     if args.input is None:
         if args.sheet is not None:
             print(
@@ -338,6 +368,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Scaffold run completed. Trace written to {trace_path}.")
         return 0
 
+    # Execution requires a candidate source because only validated candidates
+    # are eligible for local deterministic execution.
     if args.execute_candidates and args.candidates is None and not args.generate_candidates:
         print(
             "Error: --execute-candidates requires --candidates or --generate-candidates so only validated candidate tests can be executed.",
@@ -345,6 +377,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 2
 
+    # Pre-flight LLM model/API-key checks happen before local intake so config
+    # problems fail fast and do not produce partial generation artifacts.
     resolved_model = None
     if args.generate_candidates:
         resolved_model = args.llm_model or os.environ.get("DATA_TEST_AGENT_LLM_MODEL")
@@ -362,6 +396,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 2
 
     try:
+        # Deterministic intake/profile/context/manual-candidate loading is local
+        # and runs before any optional LLM generation.
         ingested = load_dataset(args.input, sheet_name=args.sheet)
         profile = profile_dataset(ingested.dataframe, ingested.metadata)
         context = None
@@ -386,6 +422,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Error: {exc}", file=sys.stderr)
         return 2
 
+    # Write the safe profile and payload artifacts. The payload is the only
+    # dataset evidence eligible for optional LLM input.
     profile_path = write_json_artifact(output_dir, PROFILE_FILE_NAME, profile.to_dict())
     payload = build_test_suggestion_payload(
         profile=profile,
@@ -394,6 +432,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     payload_path = write_json_artifact(output_dir, PAYLOAD_FILE_NAME, payload)
 
+    # Optional LLM candidate generation uses safe evidence only and still feeds
+    # into deterministic validation before execution or reporting can see it.
     llm_metadata = None
     if args.generate_candidates:
         assert resolved_model is not None
@@ -443,6 +483,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     generated_by_agent = bool(args.generate_candidates)
     llm_called = bool(args.generate_candidates)
     if validation_result is not None:
+        # Deterministic validation artifacts are written for both manual and LLM
+        # candidate sources with identical JSON shapes and authority boundaries.
         validated_suggestions_artifact = build_validated_suggestions_artifact(
             validation_result,
             candidate_tests_generated_by_this_agent=generated_by_agent,
@@ -494,7 +536,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             }
 
         if args.execute_candidates:
-            # Execution is opt-in and runs only candidates that passed validation.
+            # Optional validated-only execution is opt-in and runs only
+            # candidates that passed validation.
             # Failed check results are aggregate data-quality outcomes, not CLI
             # failures and not approvals of these suggestions.
             execution_results = execute_validated_candidates(
@@ -520,6 +563,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "test_execution_results_path": str(execution_path),
             }
 
+    # Optional deterministic report generation summarizes already-produced
+    # artifacts for human review and does not reread raw data or call an LLM.
     report_path = None
     if args.write_report:
         report_path = output_dir / REPORT_FILE_NAME
@@ -551,6 +596,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         # failure paths never leave a partial review artifact behind.
         write_text_artifact(output_dir, REPORT_FILE_NAME, report)
 
+    # Final trace writing happens after all requested stages succeed so it can
+    # record accurate stage statuses and artifact paths.
     trace_path = output_dir / TRACE_FILE_NAME
     trace = build_profile_trace(
         metadata=ingested.metadata.to_dict(),
@@ -565,6 +612,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     write_json_artifact(output_dir, TRACE_FILE_NAME, trace)
 
+    # Final user-facing completion message stays concise and points to durable
+    # artifacts rather than repeating detailed stage metadata.
     print(
         "Dataset intake, safe profiling, and evidence payload construction completed. "
         f"Trace written to {trace_path}. Profile written to {profile_path}. "

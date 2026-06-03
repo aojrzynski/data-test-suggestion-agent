@@ -48,11 +48,14 @@ def validate_candidate_tests(
     candidates into validation-passed suggestions and rejected suggestions with
     deterministic reasons for human review.
     """
+    # Aggregate profile evidence lets validation reject obvious mismatches, such
+    # as numeric_range on text columns, without rereading raw rows.
     column_profiles = {column.name: column.to_dict() for column in profile.columns}
     seen_test_ids: set[str] = set()
-    # Candidate IDs are traceability keys. If a file repeats an ID, all
-    # candidates with that ID are rejected because the validator cannot safely
-    # know which duplicate should be authoritative.
+    # Candidate IDs are traceability keys across validated/rejected artifacts,
+    # execution results, and reports. If a file repeats an ID, all candidates
+    # with that ID are rejected because the validator cannot safely know which
+    # duplicate should be authoritative.
     duplicate_test_ids = _duplicate_test_ids(candidate_entries)
     validated: list[ValidatedCandidate] = []
     rejected: list[RejectedCandidate] = []
@@ -60,8 +63,12 @@ def validate_candidate_tests(
     for index, raw_candidate in enumerate(candidate_entries):
         reasons: list[RejectionReason] = []
         notes: list[str] = []
+        # First enforce the field-level data contract so executable fields and
+        # row-leakage fields cannot flow into validated artifacts.
         _validate_field_contract(raw_candidate, reasons)
 
+        # Extract typed scalar fields without coercing invalid values into valid
+        # ones; non-string values remain validation errors below.
         test_id = _optional_string_value(raw_candidate.get("test_id"))
         test_type = _optional_string_value(raw_candidate.get("test_type"))
         column = _optional_string_value(raw_candidate.get("column"))
@@ -70,6 +77,8 @@ def validate_candidate_tests(
         suggested_by = _optional_string_value(raw_candidate.get("suggested_by"))
         parameters = raw_candidate.get("parameters", {})
 
+        # Validate identity, provenance, severity, and rationale before looking
+        # at dataset compatibility so rejected artifacts explain contract issues.
         if test_id is None or test_id.strip() == "":
             reasons.append(_reason("missing_test_id", "Candidate test_id is required and cannot be blank."))
         elif test_id in duplicate_test_ids or test_id in seen_test_ids:
@@ -95,11 +104,15 @@ def validate_candidate_tests(
         if rationale is None or rationale.strip() == "":
             reasons.append(_reason("missing_rationale", "Candidate rationale is required and cannot be blank."))
 
+        # Validate the column reference against profile metadata only; no source
+        # rows are needed to confirm whether the column exists.
         if test_type in COLUMN_REQUIRED_TEST_TYPES and (column is None or column.strip() == ""):
             reasons.append(_reason("missing_column", f"Column is required for test type '{test_type}'."))
         elif column is not None and column not in column_profiles:
             reasons.append(_reason("unknown_column", f"Column '{column}' does not exist in the loaded dataset."))
 
+        # Parameters must be a JSON object before test-type-specific rules can
+        # inspect their contents.
         if not isinstance(parameters, Mapping):
             reasons.append(_reason("invalid_parameters", "Candidate parameters must be an object when provided."))
             parameter_mapping: dict[str, Any] = {}
@@ -107,6 +120,7 @@ def validate_candidate_tests(
             parameter_mapping = dict(parameters)
 
         if test_type in ALLOWED_TEST_TYPES:
+            # Validate the narrow parameter contract for the selected test type.
             _validate_parameters(
                 test_type=test_type,
                 parameters=parameter_mapping,
@@ -114,6 +128,8 @@ def validate_candidate_tests(
             )
 
         if column in column_profiles and test_type in ALLOWED_TEST_TYPES:
+            # Profile compatibility is conservative and aggregate-only; it
+            # catches clear mismatches without turning hints into approvals.
             _validate_profile_compatibility(
                 test_type=test_type,
                 column=column,
@@ -122,6 +138,8 @@ def validate_candidate_tests(
                 notes=notes,
             )
             if context is not None:
+                # Human context can add support notes or hard rejections, but it
+                # still does not approve a candidate.
                 _validate_context(
                     test_type=test_type,
                     column=column,
@@ -131,6 +149,8 @@ def validate_candidate_tests(
                 )
 
         if reasons:
+            # Rejected artifacts keep compact, deterministic reason codes rather
+            # than copying full raw candidate payloads into reports.
             rejected.append(
                 RejectedCandidate(
                     candidate_index=index,
@@ -142,8 +162,9 @@ def validate_candidate_tests(
             )
             continue
 
-        # Construction happens after all checks so the dataclass represents only
-        # contract-valid data. Approval and execution remain separate stages.
+        # Create the validated model only after all checks pass so the dataclass
+        # represents contract-valid data. Approval and execution remain separate
+        # stages.
         validated.append(
             ValidatedCandidate(
                 candidate=CandidateTestSuggestion(
@@ -205,12 +226,17 @@ def build_rejected_suggestions_artifact(
 
 
 def _validate_field_contract(raw_candidate: dict[str, Any], reasons: list[RejectionReason]) -> None:
-    """Reject unsupported, executable, and row-leakage candidate fields."""
+    """Reject unsafe fields before candidates can reach execution/reporting.
+
+    This is the field-level safety gate for executable-looking fields and
+    row-leakage fields. Keeping it before model construction prevents unsupported
+    payloads from being treated as validated suggestions later in the workflow.
+    """
     for required_field in sorted(REQUIRED_CANDIDATE_FIELDS - set(raw_candidate)):
         reasons.append(
             _reason(
                 "missing_required_field",
-                f"Candidate field '{required_field}' is required by the PR #5 contract.",
+                f"Candidate field '{required_field}' is required by the candidate contract.",
             )
         )
 
@@ -234,7 +260,7 @@ def _validate_field_contract(raw_candidate: dict[str, Any], reasons: list[Reject
             reasons.append(
                 _reason(
                     "unsupported_field",
-                    f"Candidate field '{field_name}' is not supported by the PR #5 contract.",
+                    f"Candidate field '{field_name}' is not supported by the candidate contract.",
                 )
             )
 
@@ -247,10 +273,14 @@ def _validate_parameters(
 ) -> None:
     """Validate test-type-specific parameter shape without executing tests."""
     if test_type in NO_PARAMETER_TEST_TYPES:
+        # No-parameter tests reject extras to keep the contract narrow and avoid
+        # treating unused candidate data as meaningful.
         _reject_unknown_parameters(test_type, parameters, set(), reasons)
         return
 
     if test_type == "accepted_values":
+        # Allowed values must be supplied by the candidate source; validation
+        # never infers final accepted values from raw distinct values.
         _reject_unknown_parameters(test_type, parameters, {"allowed_values"}, reasons)
         values = parameters.get("allowed_values")
         if not isinstance(values, list) or not values:
@@ -262,11 +292,13 @@ def _validate_parameters(
             if not _is_allowed_literal(value):
                 reasons.append(_reason("invalid_parameters", "allowed_values entries must be strings, numbers, booleans, or null."))
                 break
-        # The values are accepted only because the human/fixture supplied them;
-        # this PR never infers final accepted values from raw source data.
+        # The values are accepted only because the candidate source supplied
+        # them; the agent never infers final accepted values from raw source data.
         return
 
     if test_type == "numeric_range":
+        # At least one numeric bound is required so the suggested check has a
+        # deterministic comparison to perform.
         _reject_unknown_parameters(test_type, parameters, {"min", "max"}, reasons)
         has_min = "min" in parameters
         has_max = "max" in parameters
@@ -284,6 +316,8 @@ def _validate_parameters(
         return
 
     if test_type == "regex_match":
+        # Regex compilation validates pattern syntax only. It is not code
+        # execution and the pattern text is not evaluated as a program.
         _reject_unknown_parameters(test_type, parameters, {"pattern"}, reasons)
         pattern = parameters.get("pattern")
         if not isinstance(pattern, str):
@@ -307,7 +341,12 @@ def _validate_profile_compatibility(
     reasons: list[RejectionReason],
     notes: list[str],
 ) -> None:
-    """Validate candidates against aggregate-only profile evidence."""
+    """Conservatively validate candidates against aggregate profile evidence.
+
+    Compatibility checks catch obvious unsafe mismatches but avoid turning
+    profiling hints into final decisions. For example, low-cardinality evidence
+    can add a review note, while accepted_values still requires supplied values.
+    """
     profile_type = column_profile.get("profile_type")
     if test_type == "numeric_range" and profile_type != "numeric":
         reasons.append(_reason("profile_type_mismatch", f"numeric_range requires a numeric column, but '{column}' is profiled as {profile_type}."))
@@ -325,7 +364,12 @@ def _validate_context(
     reasons: list[RejectionReason],
     notes: list[str],
 ) -> None:
-    """Apply small deterministic context-aware checks and notes."""
+    """Apply small deterministic context-aware checks and notes.
+
+    ``fields_to_ignore`` is a hard rejection because the human-authored context
+    explicitly says not to test that field. Other context fields only add review
+    notes and do not approve candidates.
+    """
     if column in context.fields_to_ignore:
         reasons.append(_reason("column_marked_to_ignore", f"Column '{column}' is marked to ignore in human-authored context."))
         return
@@ -353,6 +397,8 @@ def _duplicate_test_ids(candidate_entries: list[dict[str, Any]]) -> set[str]:
     counts: dict[str, int] = {}
     for candidate in candidate_entries:
         test_id = _optional_string_value(candidate.get("test_id"))
+        # Validate identity, provenance, severity, and rationale before looking
+        # at dataset compatibility so rejected artifacts explain contract issues.
         if test_id is None or test_id.strip() == "":
             continue
         counts[test_id] = counts.get(test_id, 0) + 1

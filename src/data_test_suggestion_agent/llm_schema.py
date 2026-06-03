@@ -1,4 +1,9 @@
-"""JSON schema for bounded LLM candidate test generation."""
+"""JSON schema for bounded LLM candidate test generation.
+
+The schema constrains structured model output, but it does not replace the
+local deterministic validator. Generated candidates still pass through the same
+candidate contract, profile compatibility, and context checks as manual files.
+"""
 
 from __future__ import annotations
 
@@ -19,6 +24,8 @@ def build_llm_candidate_response_schema() -> dict[str, Any]:
     """
     return {
         "type": "object",
+        # Disallow extra top-level fields in structured output so unexpected
+        # model text cannot masquerade as part of the candidate artifact.
         "additionalProperties": False,
         "required": ["candidate_tests"],
         "properties": {
@@ -26,6 +33,8 @@ def build_llm_candidate_response_schema() -> dict[str, Any]:
                 "type": "array",
                 "items": {
                     "type": "object",
+                    # Candidate objects also reject extra fields at schema time;
+                    # executable-field and row-leakage checks still run locally.
                     "additionalProperties": False,
                     "required": [
                         "test_id",
@@ -47,6 +56,8 @@ def build_llm_candidate_response_schema() -> dict[str, Any]:
                             "type": "string",
                             "enum": sorted(ALLOWED_SEVERITIES),
                         },
+                        # Test-type-specific parameter validation stays in
+                        # candidate_validator.py, the final deterministic gate.
                         "parameters": {"type": "object"},
                         "rationale": {"type": "string"},
                         "suggested_by": {
